@@ -2,6 +2,8 @@
 
 这是一款免费的思源笔记分享插件，支持将笔记本或文档生成分享链接，并支持设置访问密码及有效期。
 
+[中文](README_zh_CN.md) | [English](README.md)
+
 ## ✨ 使用方法
 
 - **操作入口**：在文档树中右键点击笔记本或文档，选择进入插件菜单。菜单中包含以下功能：
@@ -35,9 +37,15 @@
 
 ### 1. 生成 API Key 并填入
 
+![生成api key并填入](https://github.com/user-attachments/assets/40bb0a47-d3f5-48fc-a96b-acd46fc6287d)
+
 ### 2. 分享文档
 
+![分享文档](https://github.com/user-attachments/assets/82a5be6a-9a3e-4153-92a5-85e180c12d0e)
+
 ### 3. 打开分享文档
+
+![打开分享文档](https://github.com/user-attachments/assets/ba14f2b1-2bd0-4dfb-a32a-04ad1e7b5567)
 
 ## ☕ 支持作者
 
@@ -71,3 +79,4 @@
 - **问题反馈**：[GitHub Issues](https://github.com/b8l8u8e8/siyuan-plugin-share/issues)
 - **开源协议**：[MIT License](https://github.com/b8l8u8e8/siyuan-plugin-share/blob/main/LICENSE)
 - **更新日志**: [CHANGELOG.md](https://github.com/b8l8u8e8/siyuan-plugin-share/blob/main/CHANGELOG.md)
+
