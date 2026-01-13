@@ -93,19 +93,19 @@ This plugin relies on a server-side service:
 
 ### ① Generate an API Key and configure the plugin
 
-![Generate API Key](https://github.com/user-attachments/assets/40bb0a47-d3f5-48fc-a96b-acd46fc6287d)
+![Generate API Key](https://github.com/user-attachments/assets/8ad5e431-8a60-4e83-a594-ff1de28af68d)
 
 ---
 
 ### ② Share a document or notebook
 
-![Share document](https://github.com/user-attachments/assets/82a5be6a-9a3e-4153-92a5-85e180c12d0e)
+![Share document](https://github.com/user-attachments/assets/8bd33e72-4b09-43f3-8fe5-e81f9b39baf9)
 
 ---
 
 ### ③ Open the share link to view content
 
-![Open shared document](https://github.com/user-attachments/assets/ba14f2b1-2bd0-4dfb-a32a-04ad1e7b5567)
+![Open shared document](https://github.com/user-attachments/assets/490f459c-caac-4859-860c-e00de4356706)
 
 ---
 
@@ -157,3 +157,4 @@ Your support motivates me to **continue maintaining and improving** the plugin.
 
 - 🧾 Changelog:  
   [CHANGELOG.md](https://github.com/b8l8u8e8/siyuan-plugin-share/blob/main/CHANGELOG.md)
+
