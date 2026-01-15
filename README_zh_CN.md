@@ -151,4 +151,8 @@
 
 - 🧾 更新日志：  
   [CHANGELOG.md](https://github.com/b8l8u8e8/siyuan-plugin-share/blob/main/CHANGELOG.md)
+  
+- 🏅 贡献列表：  
+
+  [Contributors List](https://github.com/b8l8u8e8/siyuan-plugin-share/graphs/contributors)
 

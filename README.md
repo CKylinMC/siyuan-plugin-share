@@ -157,4 +157,8 @@ Your support motivates me to **continue maintaining and improving** the plugin.
 
 - 🧾 Changelog:  
   [CHANGELOG.md](https://github.com/b8l8u8e8/siyuan-plugin-share/blob/main/CHANGELOG.md)
+  
+- 🏅 Contributors:
+
+  [Contributors List](https://github.com/b8l8u8e8/siyuan-plugin-share/graphs/contributors)
 
