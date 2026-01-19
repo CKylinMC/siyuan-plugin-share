@@ -1546,6 +1546,35 @@ function site_update_info(): ?array {
     ];
 }
 
+function build_topbar_title(string $title, ?array $user): string {
+    $titleHtml = htmlspecialchars($title);
+    $versionText = site_version();
+    if ($versionText !== '') {
+        $versionLabel = $versionText;
+        if (stripos($versionLabel, 'v') !== 0) {
+            $versionLabel = 'v' . $versionLabel;
+        }
+        $titleHtml .= ' <span class="topbar-version">' . htmlspecialchars($versionLabel) . '</span>';
+    }
+    if ($user && ($user['role'] ?? '') === 'admin') {
+        $update = site_update_info();
+        if ($update) {
+            $updateVersion = trim((string)($update['version'] ?? ''));
+            if ($updateVersion !== '' && stripos($updateVersion, 'v') !== 0) {
+                $updateVersion = 'v' . $updateVersion;
+            }
+            $updateLabel = htmlspecialchars('有新版 ' . $updateVersion);
+            $updateUrl = trim((string)($update['url'] ?? ''));
+            if ($updateUrl !== '') {
+                $titleHtml .= ' <a class="topbar-version is-update" href="' . htmlspecialchars($updateUrl) . '" target="_blank" rel="noopener noreferrer">' . $updateLabel . '</a>';
+            } else {
+                $titleHtml .= ' <span class="topbar-version is-update">' . $updateLabel . '</span>';
+            }
+        }
+    }
+    return $titleHtml;
+}
+
 function country_code_zh_map(): array {
     static $map = null;
     if ($map !== null) {
@@ -6591,7 +6620,8 @@ if ($path === '/account') {
     $content .= '<button class="button primary" type="submit">更换邮箱</button>';
     $content .= '</div>';
     $content .= '</form></div>';
-    render_page('账号设置', $content, $user);
+    $titleHtml = build_topbar_title('账号设置', $user);
+    render_page('账号设置', $content, $user, '', ['title_html' => $titleHtml]);
 }
 
 if ($path === '/dashboard') {
@@ -7082,19 +7112,7 @@ if ($path === '/dashboard') {
         $content .= '</div>';
     }
 
-    $versionText = site_version();
-    $versionHtml = '';
-    if ($versionText !== '') {
-        $versionLabel = $versionText;
-        if (stripos($versionLabel, 'v') !== 0) {
-            $versionLabel = 'v' . $versionLabel;
-        }
-        $versionHtml = '<span class="topbar-version">' . htmlspecialchars($versionLabel) . '</span>';
-    }
-    $titleHtml = htmlspecialchars('控制台');
-    if ($versionHtml !== '') {
-        $titleHtml .= ' ' . $versionHtml;
-    }
+    $titleHtml = build_topbar_title('控制台', $user);
     render_page('控制台', $content, $user, '', ['layout' => 'app', 'nav' => 'dashboard', 'title_html' => $titleHtml]);
 }
 
@@ -7205,6 +7223,21 @@ if ($path === '/admin') {
     $pdo = db();
     $info = flash('info');
     $error = flash('error');
+    $createForm = $_SESSION['user_create_form'] ?? [];
+    if (!is_array($createForm)) {
+        $createForm = [];
+    }
+    $createOpen = !empty($createForm['open']);
+    $createUsername = (string)($createForm['username'] ?? '');
+    $createEmail = (string)($createForm['email'] ?? '');
+    $createRole = (string)($createForm['role'] ?? 'user');
+    if (!in_array($createRole, ['admin', 'user'], true)) {
+        $createRole = 'user';
+    }
+    $createDisabled = (string)($createForm['disabled'] ?? '0');
+    $createLimitMb = (string)($createForm['limit_mb'] ?? '0');
+    $createPassword = (string)($createForm['password'] ?? '');
+    unset($_SESSION['user_create_form']);
     $allowRegistration = allow_registration();
     $captchaEnabled = captcha_enabled();
     $emailVerifyEnabled = email_verification_enabled();
@@ -7626,7 +7659,10 @@ if ($path === '/admin') {
     $content .= '<option value="user"' . ($userRole === 'user' ? ' selected' : '') . '>普通用户</option>';
     $content .= '</select></div>';
     $content .= '</div>';
-    $content .= '<div style="margin-top:12px"><button class="button" type="submit">筛选</button></div>';
+    $content .= '<div class="table-actions">';
+    $content .= '<button class="button" type="submit">筛选</button>';
+    $content .= '<button class="button" type="button" data-user-create-open>添加账号</button>';
+    $content .= '</div>';
     $content .= '</form>';
 
     $content .= '<form id="user-batch-form" method="post" action="' . base_path() . '/admin/user-batch" data-batch-form="user">';
@@ -7663,7 +7699,8 @@ if ($path === '/admin') {
             $content .= '<td>' . htmlspecialchars($usedLabel) . ' / ' . htmlspecialchars($limitLabel) . '</td>';
             $content .= '<td class="actions">';
             $content .= '<button class="button" type="button" data-user-edit data-user-id="' . (int)$u['id'] . '" data-user-name="' . htmlspecialchars($u['username']) . '" data-user-email="' . htmlspecialchars((string)$u['email']) . '" data-user-role="' . htmlspecialchars((string)$u['role']) . '" data-user-disabled="' . (int)$u['disabled'] . '" data-user-limit="' . (int)$limitMb . '">编辑</button>';
-            $content .= '<a class="button" href="' . base_path() . '/admin?user=' . (int)$u['id'] . '&status=all">查看分享</a>';
+            $shareUrl = build_admin_query_url('shares', ['user' => (int)$u['id'], 'status' => 'all']);
+            $content .= '<a class="button" href="' . htmlspecialchars($shareUrl) . '">查看分享</a>';
             if ($u['role'] !== 'admin' && (int)$u['id'] !== (int)$admin['id']) {
                 $content .= '<form method="post" action="' . base_path() . '/admin/user-delete" class="inline-form" data-confirm-message="确定删除该用户及其所有分享吗？该操作不可恢复。">';
                 $content .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
@@ -7977,37 +8014,33 @@ if ($path === '/admin') {
     $content .= '</form>';
     $content .= '</div>';
     $content .= '</div>';
-    $versionText = site_version();
-    $versionHtml = '';
-    if ($versionText !== '') {
-        $versionLabel = $versionText;
-        if (stripos($versionLabel, 'v') !== 0) {
-            $versionLabel = 'v' . $versionLabel;
-        }
-        $versionHtml = '<span class="topbar-version">' . htmlspecialchars($versionLabel) . '</span>';
-    }
-    $update = site_update_info();
-    $updateHtml = '';
-    if ($update) {
-        $updateVersion = trim((string)($update['version'] ?? ''));
-        if ($updateVersion !== '' && stripos($updateVersion, 'v') !== 0) {
-            $updateVersion = 'v' . $updateVersion;
-        }
-        $updateLabel = htmlspecialchars('有新版 ' . $updateVersion);
-        $updateUrl = trim((string)($update['url'] ?? ''));
-        if ($updateUrl !== '') {
-            $updateHtml = '<a class="topbar-version is-update" href="' . htmlspecialchars($updateUrl) . '" target="_blank" rel="noopener noreferrer">' . $updateLabel . '</a>';
-        } else {
-            $updateHtml = '<span class="topbar-version is-update">' . $updateLabel . '</span>';
-        }
-    }
-    $titleHtml = htmlspecialchars('后台');
-    if ($versionHtml !== '') {
-        $titleHtml .= ' ' . $versionHtml;
-    }
-    if ($updateHtml !== '') {
-        $titleHtml .= ' ' . $updateHtml;
-    }
+    $createModalHidden = $createOpen ? '' : ' hidden';
+    $roleAdminSelected = $createRole === 'admin' ? ' selected' : '';
+    $roleUserSelected = $createRole !== 'admin' ? ' selected' : '';
+    $disabledSelected = $createDisabled === '1' ? ' selected' : '';
+    $activeSelected = $createDisabled === '1' ? '' : ' selected';
+    $content .= '<div class="modal" data-user-create-modal' . $createModalHidden . '>';
+    $content .= '<div class="modal-backdrop" data-modal-close></div>';
+    $content .= '<div class="modal-card">';
+    $content .= '<div class="modal-header">添加账号</div>';
+    $content .= '<form method="post" action="' . base_path() . '/admin/user-create" class="modal-form">';
+    $content .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
+    $content .= '<div class="grid">';
+    $content .= '<div><label>用户名</label><input class="input" name="username" value="' . htmlspecialchars($createUsername) . '" required></div>';
+    $content .= '<div><label>邮箱</label><input class="input" name="email" value="' . htmlspecialchars($createEmail) . '"></div>';
+    $content .= '<div><label>角色</label><select class="input" name="role"><option value="user"' . $roleUserSelected . '>普通用户</option><option value="admin"' . $roleAdminSelected . '>管理员</option></select></div>';
+    $content .= '<div><label>状态</label><select class="input" name="disabled"><option value="0"' . $activeSelected . '>正常</option><option value="1"' . $disabledSelected . '>禁用</option></select></div>';
+    $content .= '<div><label>存储上限 (MB)</label><input class="input" name="limit_mb" type="number" min="0" value="' . htmlspecialchars($createLimitMb) . '"></div>';
+    $content .= '<div><label>密码</label><input class="input" name="password" type="password" value="' . htmlspecialchars($createPassword) . '" required></div>';
+    $content .= '</div>';
+    $content .= '<div class="modal-actions">';
+    $content .= '<button class="button ghost" type="button" data-modal-close>取消</button>';
+    $content .= '<button class="button primary" type="submit">添加</button>';
+    $content .= '</div>';
+    $content .= '</form>';
+    $content .= '</div>';
+    $content .= '</div>';
+    $titleHtml = build_topbar_title('后台', $admin);
     render_page('后台', $content, $admin, '', ['layout' => 'app', 'nav' => 'admin-settings', 'title_html' => $titleHtml]);
 }
 
@@ -8200,6 +8233,90 @@ if ($path === '/admin/user-delete' && $_SERVER['REQUEST_METHOD'] === 'POST') {
         redirect('/admin#users');
     }
     flash('info', '用户已删除');
+    redirect('/admin#users');
+}
+
+if ($path === '/admin/user-create' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    require_admin();
+    check_csrf();
+    $username = trim((string)($_POST['username'] ?? ''));
+    $email = trim((string)($_POST['email'] ?? ''));
+    $role = (string)($_POST['role'] ?? 'user');
+    $disabled = (int)($_POST['disabled'] ?? 0);
+    $limitMb = max(0, (int)($_POST['limit_mb'] ?? 0));
+    $password = (string)($_POST['password'] ?? '');
+    if (!in_array($role, ['admin', 'user'], true)) {
+        $role = 'user';
+    }
+    $createForm = [
+        'open' => 1,
+        'username' => $username,
+        'email' => $email,
+        'role' => $role,
+        'disabled' => (string)($disabled ? 1 : 0),
+        'limit_mb' => (string)$limitMb,
+        'password' => $password,
+    ];
+    if ($username === '' || $password === '') {
+        $_SESSION['user_create_form'] = $createForm;
+        flash('error', '请输入用户名和密码');
+        redirect('/admin#users');
+    }
+    if (strlen($password) < 6) {
+        $_SESSION['user_create_form'] = $createForm;
+        flash('error', '密码至少 6 位');
+        redirect('/admin#users');
+    }
+    if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+        $_SESSION['user_create_form'] = $createForm;
+        flash('error', '邮箱格式不正确');
+        redirect('/admin#users');
+    }
+    $pdo = db();
+    if ($email !== '') {
+        $checkEmail = $pdo->prepare('SELECT id FROM users WHERE email = :email LIMIT 1');
+        $checkEmail->execute([':email' => $email]);
+        if ($checkEmail->fetch()) {
+            $_SESSION['user_create_form'] = $createForm;
+            flash('error', '邮箱已被其他账号使用');
+            redirect('/admin#users');
+        }
+    }
+    $check = $pdo->prepare('SELECT id FROM users WHERE username = :username LIMIT 1');
+    $check->execute([':username' => $username]);
+    if ($check->fetch()) {
+        $_SESSION['user_create_form'] = $createForm;
+        flash('error', '用户名已存在');
+        redirect('/admin#users');
+    }
+    $passwordHash = password_hash($password, PASSWORD_DEFAULT);
+    $emailVerified = $email !== '' ? 1 : 0;
+    $stmt = $pdo->prepare('INSERT INTO users (username, email, password_hash, role, api_key_hash, api_key_prefix, api_key_last4, disabled, storage_limit_bytes, storage_used_bytes, must_change_password, email_verified, created_at, updated_at)
+        VALUES (:username, :email, :password_hash, :role, :api_key_hash, :api_key_prefix, :api_key_last4, :disabled, :storage_limit_bytes, :storage_used_bytes, :must_change_password, :email_verified, :created_at, :updated_at)');
+    try {
+        $stmt->execute([
+            ':username' => $username,
+            ':email' => $email,
+            ':password_hash' => $passwordHash,
+            ':role' => $role,
+            ':api_key_hash' => null,
+            ':api_key_prefix' => null,
+            ':api_key_last4' => null,
+            ':disabled' => $disabled ? 1 : 0,
+            ':storage_limit_bytes' => bytes_from_mb($limitMb),
+            ':storage_used_bytes' => 0,
+            ':must_change_password' => 0,
+            ':email_verified' => $emailVerified,
+            ':created_at' => now(),
+            ':updated_at' => now(),
+        ]);
+    } catch (PDOException $e) {
+        $_SESSION['user_create_form'] = $createForm;
+        flash('error', '账号创建失败');
+        redirect('/admin#users');
+    }
+    unset($_SESSION['user_create_form']);
+    flash('info', '账号已添加');
     redirect('/admin#users');
 }
 
@@ -8734,13 +8851,22 @@ if ($path === '/') {
     $siteIcp = get_setting('site_icp', '');
     $siteContactEmail = get_setting('site_contact_email', '');
     $appName = htmlspecialchars($config['app_name']);
+    $versionText = site_version();
+    $versionHtml = '';
+    if ($versionText !== '') {
+        $versionLabel = $versionText;
+        if (stripos($versionLabel, 'v') !== 0) {
+            $versionLabel = 'v' . $versionLabel;
+        }
+        $versionHtml = '<span class="home-version">' . htmlspecialchars($versionLabel) . '</span>';
+    }
     $loginUrl = base_path() . '/login';
     $registerUrl = base_path() . '/register';
 
     $content = '<section class="home-hero">';
     $content .= '<div class="home-hero__main">';
     $content .= '<div class="home-badge">官方 Markdown 导出</div>';
-    $content .= '<h1>' . $appName . '</h1>';
+    $content .= '<h1 class="home-title">' . $appName . $versionHtml . '</h1>';
     $content .= '<p class="home-lead">让文档与笔记本以可控的外链分享：自动同步、密码与到期控制、统一链接管理。</p>';
     $content .= '<div class="home-actions">';
     $content .= '<a class="button primary" href="' . $loginUrl . '">立即登录</a>';

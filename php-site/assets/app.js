@@ -629,6 +629,33 @@
     });
   };
 
+  const initUserCreateModal = () => {
+    const modal = document.querySelector("[data-user-create-modal]");
+    if (!modal) return;
+    const openButtons = document.querySelectorAll("[data-user-create-open]");
+    if (!openButtons.length) return;
+    const form = modal.querySelector("form");
+    const close = () => {
+      modal.hidden = true;
+    };
+    modal.addEventListener("click", (event) => {
+      const target = event.target;
+      if (
+        target &&
+        (target.matches("[data-modal-close]") ||
+          target.classList.contains("modal-backdrop"))
+      ) {
+        close();
+      }
+    });
+    openButtons.forEach((btn) => {
+      btn.addEventListener("click", () => {
+        if (form) form.reset();
+        modal.hidden = false;
+      });
+    });
+  };
+
   const initBatchConfirm = () => {
     document.querySelectorAll("form[data-batch-form]").forEach((form) => {
       form.addEventListener("submit", (event) => {
@@ -1607,6 +1634,7 @@
   initDocTreeScroll();
   initBatchSelection();
   initUserModal();
+  initUserCreateModal();
   initBatchConfirm();
   initReportModal();
   initToggleSubmit();

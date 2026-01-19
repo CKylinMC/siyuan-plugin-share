@@ -471,6 +471,24 @@ label {
   margin: 8px 0 10px;
 }
 
+.home-hero__main .home-title {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.home-version {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(90, 123, 255, 0.12);
+  color: #5c6aa8;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
 .home-badge {
   display: inline-flex;
   align-items: center;
