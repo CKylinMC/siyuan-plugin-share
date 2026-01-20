@@ -1,8 +1,6 @@
 <?php
 return [
     'app_name' => '思源笔记分享',
-    // Site version shown in dashboard header, e.g. "0.2.2"
-    'site_version' => '0.2.6',
     'allow_registration' => true,
     'default_storage_limit_mb' => 1024,
     // Session lifetime (days)
@@ -28,4 +26,9 @@ return [
     'smtp_pass' => '',
     // 'db_path' => __DIR__ . '/storage/app.db',
     // 'uploads_dir' => __DIR__ . '/uploads',
+
+    // Site version shown in dashboard header, 不要改动此项
+    'site_version' => '0.2.7',
+    // Central stats server used for update heartbeat, 不要改动此项
+    'central_stats_url' => 'https://share.b0x.top',
 ];
