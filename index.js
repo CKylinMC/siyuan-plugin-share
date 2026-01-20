@@ -1531,6 +1531,9 @@ class SiYuanSharePlugin extends Plugin {
         <button class="b3-button b3-button--outline" data-action="copy" data-share-id="${escapeAttr(
           share.id,
         )}">${escapeHtml(t("siyuanShare.action.copyLink"))}</button>
+        <button class="b3-button b3-button--outline" data-action="copy-info" data-share-id="${escapeAttr(
+          share.id,
+        )}">${escapeHtml(t("siyuanShare.action.copyShareInfo"))}</button>
       </div>
       <div class="siyuan-plugin-share__actions">
         <button class="b3-button b3-button--outline" data-action="update" data-share-id="${escapeAttr(
@@ -1611,6 +1614,11 @@ class SiYuanSharePlugin extends Plugin {
           if (action === "copy") {
             const shareId = btn.getAttribute("data-share-id");
             await this.copyShareLink(shareId);
+            return;
+          }
+          if (action === "copy-info") {
+            const shareId = btn.getAttribute("data-share-id");
+            await this.copyShareInfo(shareId, {title: itemTitle});
             return;
           }
           if (action === "update") {
@@ -2667,6 +2675,7 @@ class SiYuanSharePlugin extends Plugin {
     void (async () => {
       try {
         if (action === "copy-link") return await this.copyShareLink(shareId);
+        if (action === "copy-info") return await this.copyShareInfo(shareId);
         if (action === "update") return await this.updateShare(shareId);
         if (action === "update-access") {
           const share = this.getShareById(shareId);
@@ -2802,6 +2811,9 @@ class SiYuanSharePlugin extends Plugin {
       <button class="b3-button b3-button--outline" data-action="copy-link" data-share-id="${escapeAttr(
           s.id,
         )}">${escapeHtml(t("siyuanShare.action.copyLink"))}</button>
+      <button class="b3-button b3-button--outline" data-action="copy-info" data-share-id="${escapeAttr(
+          s.id,
+        )}">${escapeHtml(t("siyuanShare.action.copyShareInfo"))}</button>
     </div>
   </div>
   <div class="sps-share-item__actions">
@@ -3401,6 +3413,7 @@ class SiYuanSharePlugin extends Plugin {
         if (syncError) throw syncError;
         throw new Error(t("siyuanShare.error.shareCreateFailed"));
       }
+      await this.updateSharePasswordCache(share.id, {password, clearPassword});
       if (requestError) {
         console.warn("shareDoc response error, but share exists after sync", requestError);
       }
@@ -3565,6 +3578,7 @@ class SiYuanSharePlugin extends Plugin {
         if (syncError) throw syncError;
         throw new Error(t("siyuanShare.error.shareCreateFailed"));
       }
+      await this.updateSharePasswordCache(share.id, {password, clearPassword});
       if (requestError) {
         console.warn("shareNotebook response error, but share exists after sync", requestError);
       }
@@ -3765,6 +3779,7 @@ class SiYuanSharePlugin extends Plugin {
       });
       progress.update(t("siyuanShare.progress.syncingShareList"));
       await this.syncRemoteShares({silent: true, controller, progress});
+      await this.updateSharePasswordCache(existing.id, {password, clearPassword});
       this.renderSettingCurrent();
       this.notify(t("siyuanShare.message.accessUpdated"));
     } finally {
@@ -3810,6 +3825,94 @@ class SiYuanSharePlugin extends Plugin {
     if (!url) throw new Error(t("siyuanShare.error.shareLinkEmpty"));
     await this.tryCopyToClipboard(url);
     this.notify(t("siyuanShare.message.copyLinkSuccess"));
+  }
+
+  buildShareInfoText(share, titleOverride = "") {
+    const t = this.t.bind(this);
+    const titleRaw = String(titleOverride || share?.title || "").trim();
+    const title = titleRaw || t("siyuanShare.label.untitled");
+    const lines = [t("siyuanShare.copyInfo.title", {title})];
+    const url = this.getShareUrl(share);
+    if (url) lines.push(t("siyuanShare.copyInfo.link", {value: url}));
+    const password = String(share?.password || "").trim();
+    if (password) lines.push(t("siyuanShare.copyInfo.password", {value: password}));
+    const expiresAt = normalizeTimestampMs(share?.expiresAt || 0);
+    if (expiresAt) lines.push(t("siyuanShare.copyInfo.expiresAt", {value: this.formatTime(expiresAt)}));
+    const visitorLimitValue = Number.isFinite(Number(share?.visitorLimit))
+      ? Math.max(0, Math.floor(Number(share.visitorLimit)))
+      : 0;
+    if (visitorLimitValue > 0) {
+      lines.push(t("siyuanShare.copyInfo.visitorLimit", {count: visitorLimitValue}));
+    }
+    return lines.join("\n");
+  }
+
+  async copyShareInfo(shareId, {title = ""} = {}) {
+    const t = this.t.bind(this);
+    const existing = this.getShareById(shareId);
+    if (!existing) throw new Error(t("siyuanShare.error.shareNotFound"));
+    const text = this.buildShareInfoText(existing, title);
+    await this.tryCopyToClipboard(text);
+    this.notify(t("siyuanShare.message.copyShareInfoSuccess"));
+  }
+
+  collectSharePasswords(shares) {
+    const map = {};
+    if (!Array.isArray(shares)) return map;
+    shares.forEach((share) => {
+      const id = share?.id;
+      if (!id) return;
+      const password = String(share?.password || "").trim();
+      if (password) map[String(id)] = password;
+    });
+    return map;
+  }
+
+  applySharePasswords(shares, passwordMap) {
+    if (!Array.isArray(shares)) return [];
+    if (!passwordMap || Object.keys(passwordMap).length === 0) return shares;
+    return shares.map((share) => {
+      const password = passwordMap[String(share?.id)] || "";
+      if (!password) return share;
+      return {...share, password};
+    });
+  }
+
+  async updateSharePasswordCache(shareId, {password = "", clearPassword = false} = {}) {
+    const targetId = String(shareId || "");
+    if (!targetId) return;
+    const nextPassword = clearPassword ? "" : String(password || "").trim();
+    if (!nextPassword && !clearPassword) return;
+    const updateList = (list) => {
+      if (!Array.isArray(list)) return list;
+      let changed = false;
+      const nextList = list.map((share) => {
+        if (String(share?.id) !== targetId) return share;
+        if (clearPassword) {
+          if (!share || !("password" in share)) return share;
+          const next = {...share};
+          delete next.password;
+          changed = true;
+          return next;
+        }
+        if (nextPassword && share?.password !== nextPassword) {
+          changed = true;
+          return {...share, password: nextPassword};
+        }
+        return share;
+      });
+      return changed ? nextList : list;
+    };
+    this.shares = updateList(this.shares);
+    const activeSiteId = String(this.settings.activeSiteId || "");
+    if (!activeSiteId) return;
+    if (Array.isArray(this.siteShares?.[activeSiteId])) {
+      const updated = updateList(this.siteShares[activeSiteId]);
+      if (updated !== this.siteShares[activeSiteId]) {
+        this.siteShares[activeSiteId] = updated;
+        await this.saveData(STORAGE_SITE_SHARES, this.siteShares);
+      }
+    }
   }
 
   async tryCopyToClipboard(text) {
@@ -3912,10 +4015,13 @@ class SiYuanSharePlugin extends Plugin {
       controller,
       progress,
     });
-    const shares = Array.isArray(data?.shares) ? data.shares : [];
+    const activeSiteId = String(this.settings.activeSiteId || "");
+    const rawShares = Array.isArray(data?.shares) ? data.shares : [];
+    const passwordMap = activeSiteId ? this.collectSharePasswords(this.siteShares?.[activeSiteId]) : {};
+    const shares = this.applySharePasswords(rawShares, passwordMap);
     this.shares = shares;
-    if (this.settings.activeSiteId) {
-      this.siteShares[this.settings.activeSiteId] = shares;
+    if (activeSiteId) {
+      this.siteShares[activeSiteId] = shares;
       await this.saveData(STORAGE_SITE_SHARES, this.siteShares);
     }
     this.renderDock();
