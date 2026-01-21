@@ -1217,7 +1217,7 @@
     };
 
     const setScale = (nextScale) => {
-      scale = clamp(nextScale, 0.5, 3);
+      scale = clamp(nextScale, 0.5, 5);
       applyTransform();
       requestAnimationFrame(() => {
         clampTranslation();
@@ -2107,7 +2107,8 @@
       const bytes = toUtf8Bytes(input);
       const deflated = deflateWithPako(bytes);
       if (!deflated) return "";
-      return encodePlantUmlData(deflated);
+      const encoded = encodePlantUmlData(deflated);
+      return encoded ? `~1${encoded}` : "";
     };
 
     const encodePlantUmlAsync = async (source) => {
@@ -2119,7 +2120,8 @@
         deflated = await deflateWithStream(bytes);
       }
       if (!deflated) return "";
-      return encodePlantUmlData(deflated);
+      const encoded = encodePlantUmlData(deflated);
+      return encoded ? `~1${encoded}` : "";
     };
 
     const renderPlantUml = (container) => {

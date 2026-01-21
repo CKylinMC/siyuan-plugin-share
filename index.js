@@ -23,6 +23,7 @@ try {
 const STORAGE_SETTINGS = "settings";
 const STORAGE_SHARES = "shares";
 const STORAGE_SITE_SHARES = "sharesBySite";
+const STORAGE_SHARE_OPTIONS = "shareOptions";
 const DOCK_TYPE = "siyuan-plugin-share-dock";
 const MB = 1024 * 1024;
 const UPLOAD_CHUNK_MIN_SIZE = 256 * 1024;
@@ -866,6 +867,87 @@ function getDocTreeChildren(node) {
   return Array.isArray(children) ? children : [];
 }
 
+function extractDocIdFromValue(value) {
+  if (!value) return "";
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  if (isValidDocId(raw)) return raw;
+  const matches = raw.match(/\d{14}-[a-z0-9]{7}/gi);
+  if (!matches || matches.length === 0) return "";
+  const candidate = matches[matches.length - 1];
+  return isValidDocId(candidate) ? candidate : "";
+}
+
+function deriveParentIdFromPath(pathValue, selfId = "") {
+  if (!pathValue) return "";
+  const parts = String(pathValue || "")
+    .split("/")
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (parts.length < 2) return "";
+  for (let i = parts.length - 2; i >= 0; i -= 1) {
+    const parentId = extractDocIdFromValue(parts[i]);
+    if (parentId && parentId !== selfId) return parentId;
+  }
+  return "";
+}
+
+function getDocTreeNodeId(node) {
+  if (!node) return "";
+  const candidates = [
+    node?.id,
+    node?.docId,
+    node?.docID,
+    node?.nodeId,
+    node?.nodeID,
+    node?.rootId,
+    node?.rootID,
+    node?.blockId,
+    node?.blockID,
+    node?.path,
+    node?.data?.id,
+    node?.data?.docId,
+    node?.data?.nodeId,
+    node?.data?.rootId,
+  ];
+  for (const candidate of candidates) {
+    const extracted = extractDocIdFromValue(candidate);
+    if (extracted) return extracted;
+  }
+  return "";
+}
+
+function getDocTreeNodeParentId(node) {
+  if (!node) return "";
+  const candidates = [
+    node?.parentId,
+    node?.parentID,
+    node?.parent_id,
+    node?.parent,
+    node?.data?.parentId,
+    node?.data?.parentID,
+    node?.data?.parent_id,
+  ];
+  for (const candidate of candidates) {
+    const extracted = extractDocIdFromValue(candidate);
+    if (extracted) return extracted;
+  }
+  return "";
+}
+
+function findDocTreeNode(nodes, docId) {
+  if (!Array.isArray(nodes) || !isValidDocId(docId)) return null;
+  const stack = [...nodes];
+  while (stack.length) {
+    const node = stack.pop();
+    const nodeId = getDocTreeNodeId(node);
+    if (nodeId && nodeId === docId) return node;
+    const children = getDocTreeChildren(node);
+    if (children.length) stack.push(...children);
+  }
+  return null;
+}
+
 function getDocTreeSortValue(node) {
   if (!node) return null;
   const candidates = [
@@ -903,10 +985,9 @@ function flattenDocTree(nodes, out = [], parentId = "") {
   if (!Array.isArray(nodes)) return out;
   const ordered = sortDocTreeNodes(nodes);
   ordered.forEach((node, index) => {
-    const id = String(node?.id || node?.docId || node?.nodeId || node?.path || "");
+    const id = getDocTreeNodeId(node);
     const title = String(node?.name || node?.title || node?.content || node?.label || "");
-    const nodeParent =
-      String(node?.parentId || node?.parentID || node?.parent_id || node?.parent || "") || "";
+    const nodeParent = getDocTreeNodeParentId(node) || "";
     const validId = isValidDocId(id);
     const sortValue = getDocTreeSortValue(node);
     const sortIndex = Number.isFinite(sortValue) ? sortValue : index;
@@ -942,6 +1023,7 @@ class SiYuanSharePlugin extends Plugin {
     this.uploadTuner = {avgSpeed: 0, samples: 0};
     this.shares = [];
     this.siteShares = {};
+    this.shareOptions = {};
     this.dockElement = null;
     this.workspaceDir = "";
     this.hasNodeFs = !!(fs && path);
@@ -1225,7 +1307,7 @@ class SiYuanSharePlugin extends Plugin {
     if (!isValidDocId(blockId)) return null;
     try {
       const resp = await fetchSyncPost("/api/query/sql", {
-        stmt: `SELECT id, root_id AS rootId, content AS content, type AS type FROM blocks WHERE id='${blockId}' LIMIT 1`,
+        stmt: `SELECT id, root_id AS rootId, content AS content, type AS type, box AS box, path AS path FROM blocks WHERE id='${blockId}' LIMIT 1`,
       });
       if (resp && resp.code === 0 && Array.isArray(resp.data) && resp.data.length > 0) {
         return resp.data[0] || null;
@@ -1480,7 +1562,7 @@ class SiYuanSharePlugin extends Plugin {
       };
     };
 
-    const renderContent = () => {
+  const renderContent = () => {
       const state = buildViewState();
       const share = state.share;
       const url = state.url;
@@ -1491,6 +1573,18 @@ class SiYuanSharePlugin extends Plugin {
       const currentVisitorLabel = state.currentVisitorLabel;
       const passwordInputValue = state.passwordInputValue;
       const passwordPlaceholder = state.passwordPlaceholder;
+      const optionKey = share?.id ? String(share.id) : "";
+      const optionValue =
+        optionKey && Object.prototype.hasOwnProperty.call(this.shareOptions || {}, optionKey)
+          ? this.shareOptions[optionKey]
+          : null;
+      const includeChildrenDefault =
+        typeof optionValue === "boolean"
+          ? optionValue
+          : typeof share?.includeChildren === "boolean"
+            ? share.includeChildren
+            : false;
+      const showDocOptions = itemType === SHARE_TYPES.DOC;
       return `<div class="siyuan-plugin-share sps-dialog-body">
   <div class="siyuan-plugin-share__section">
     <div class="siyuan-plugin-share__title">${escapeHtml(typeLabel)}</div>
@@ -1519,6 +1613,18 @@ class SiYuanSharePlugin extends Plugin {
       currentPasswordLabel,
     )} | ${escapeHtml(currentExpiresLabel)} | ${escapeHtml(currentVisitorLabel)}</div>
   </div>
+  ${
+    showDocOptions
+      ? `<div class="siyuan-plugin-share__section">
+    <div class="siyuan-plugin-share__title">${escapeHtml(t("siyuanShare.section.shareOptions"))}</div>
+    <label class="sps-checkbox">
+      <input id="sps-share-include-children" type="checkbox"${includeChildrenDefault ? " checked" : ""} />
+      <span>${escapeHtml(t("siyuanShare.label.includeChildren"))}</span>
+    </label>
+    <div class="siyuan-plugin-share__muted">${escapeHtml(t("siyuanShare.hint.includeChildren"))}</div>
+  </div>`
+      : ""
+  }
   <div class="siyuan-plugin-share__section">
     <div class="siyuan-plugin-share__title">${escapeHtml(t("siyuanShare.section.shareLink"))}</div>
     ${
@@ -1573,6 +1679,7 @@ class SiYuanSharePlugin extends Plugin {
       const passwordInput = root?.querySelector?.("#sps-share-password");
       const expiresInput = root?.querySelector?.("#sps-share-expires");
       const visitorInput = root?.querySelector?.("#sps-share-visitor-limit");
+      const includeChildrenInput = root?.querySelector?.("#sps-share-include-children");
       const passwordRaw = (passwordInput?.value || "").trim();
       const expiresAt = parseDateTimeLocalInput(expiresInput?.value || "");
       const visitorRaw = (visitorInput?.value || "").trim();
@@ -1584,6 +1691,7 @@ class SiYuanSharePlugin extends Plugin {
       const hasExistingExpires = normalizeTimestampMs(currentShare?.expiresAt || 0) > 0;
       const hasExistingVisitorLimit = Number(currentShare?.visitorLimit || 0) > 0;
       const password = passwordRaw === passwordKeepToken ? "" : passwordRaw;
+      const includeChildren = !!includeChildrenInput?.checked;
       return {
         password,
         clearPassword: !!currentShare && hasExistingPassword && passwordRaw === "",
@@ -1591,6 +1699,7 @@ class SiYuanSharePlugin extends Plugin {
         clearExpires: !!currentShare && hasExistingExpires && !expiresAt,
         visitorLimit,
         clearVisitorLimit: !!currentShare && hasExistingVisitorLimit && visitorRaw === "",
+        includeChildren,
       };
     };
 
@@ -2125,8 +2234,13 @@ class SiYuanSharePlugin extends Plugin {
     const settings = (await this.loadData(STORAGE_SETTINGS)) || {};
     const legacyShares = (await this.loadData(STORAGE_SHARES)) || [];
     const siteSharesRaw = (await this.loadData(STORAGE_SITE_SHARES)) || {};
+    const shareOptionsRaw = (await this.loadData(STORAGE_SHARE_OPTIONS)) || {};
     const siteShares =
       siteSharesRaw && typeof siteSharesRaw === "object" && !Array.isArray(siteSharesRaw) ? siteSharesRaw : {};
+    const shareOptions =
+      shareOptionsRaw && typeof shareOptionsRaw === "object" && !Array.isArray(shareOptionsRaw)
+        ? shareOptionsRaw
+        : {};
     let sites = this.normalizeSiteList(settings.sites);
     let activeSiteId = String(settings.activeSiteId || "");
     let persistSettings = false;
@@ -2156,6 +2270,7 @@ class SiYuanSharePlugin extends Plugin {
       persistShares = true;
     }
     this.siteShares = siteShares;
+    this.shareOptions = shareOptions;
     this.settings = {
       siteUrl: activeSite?.siteUrl || "",
       apiKey: activeSite?.apiKey || "",
@@ -3293,6 +3408,7 @@ class SiYuanSharePlugin extends Plugin {
       clearExpires = false,
       visitorLimit = null,
       clearVisitorLimit = false,
+      includeChildren = false,
       allowRequestError = true,
     } = {},
   ) {
@@ -3308,24 +3424,98 @@ class SiYuanSharePlugin extends Plugin {
       const info = await this.resolveDocInfoFromAnyId(docId);
       const title = info?.title || t("siyuanShare.label.untitled");
       throwIfAborted(controller, t("siyuanShare.message.cancelled"));
-      progress.update(t("siyuanShare.progress.exportingMarkdown"));
-      const exportRes = await this.exportDocMarkdown(docId);
-      throwIfAborted(controller, t("siyuanShare.message.cancelled"));
-      progress.update(t("siyuanShare.progress.preparingAssets"));
-      const {markdown, assets, failures} = await this.prepareMarkdownAssets(
-        exportRes.content || "",
-        controller,
-      );
-      if (failures.length > 0) {
-        this.notify(t("siyuanShare.message.resourcesSkipped", {count: failures.length}));
+      let payload = null;
+      let assetEntries = [];
+      let assetManifest = [];
+      let resourceFailures = 0;
+      let subtreeDocs = [];
+      if (includeChildren) {
+        progress.update(t("siyuanShare.progress.fetchingNotebookList"));
+        subtreeDocs = await this.listDocSubtree(docId);
       }
-      const payload = {
-        docId,
-        title,
-        hPath: exportRes.hPath || "",
-        markdown,
-        sortOrder: 0,
-      };
+      const useChildren = includeChildren && subtreeDocs.length > 1;
+      if (!useChildren) {
+        progress.update(t("siyuanShare.progress.exportingMarkdown"));
+        const exportRes = await this.exportDocMarkdown(docId);
+        throwIfAborted(controller, t("siyuanShare.message.cancelled"));
+        progress.update(t("siyuanShare.progress.preparingAssets"));
+        const {markdown, assets, failures} = await this.prepareMarkdownAssets(
+          exportRes.content || "",
+          controller,
+        );
+        resourceFailures += failures.length;
+        payload = {
+          docId,
+          title,
+          hPath: exportRes.hPath || "",
+          markdown,
+          sortOrder: 0,
+        };
+        const seenAssets = new Set();
+        for (const asset of assets) {
+          const assetPath = asset?.path || "";
+          if (!assetPath || seenAssets.has(assetPath)) continue;
+          seenAssets.add(assetPath);
+          assetEntries.push({asset, docId});
+          assetManifest.push({
+            path: assetPath,
+            size: Number(asset?.blob?.size) || 0,
+            docId,
+          });
+        }
+      } else {
+        const docPayloads = [];
+        const assetMap = new Map();
+        for (const [index, doc] of subtreeDocs.entries()) {
+          throwIfAborted(controller, t("siyuanShare.message.cancelled"));
+          progress.update(
+            t("siyuanShare.progress.exportingDoc", {index: index + 1, total: subtreeDocs.length}),
+          );
+          const exportRes = await this.exportDocMarkdown(doc.docId);
+          throwIfAborted(controller, t("siyuanShare.message.cancelled"));
+          progress.update(
+            t("siyuanShare.progress.preparingAssetsIndex", {
+              index: index + 1,
+              total: subtreeDocs.length,
+            }),
+          );
+          const {markdown, assets, failures} = await this.prepareMarkdownAssets(
+            exportRes.content || "",
+            controller,
+          );
+          resourceFailures += failures.length;
+          const docTitle =
+            doc.title || (doc.docId === docId ? title : t("siyuanShare.label.untitled"));
+          docPayloads.push({
+            docId: doc.docId,
+            title: docTitle,
+            hPath: exportRes.hPath || "",
+            parentId: doc.docId === docId ? "" : doc.parentId || "",
+            sortIndex: Number.isFinite(doc.sortIndex) ? doc.sortIndex : index,
+            sortOrder: index,
+            markdown,
+          });
+          for (const asset of assets) {
+            if (!assetMap.has(asset.path)) {
+              assetMap.set(asset.path, {asset, docId: doc.docId});
+            }
+          }
+        }
+        payload = {
+          docId,
+          title,
+          docs: docPayloads,
+        };
+        assetEntries = Array.from(assetMap.values());
+        assetManifest = assetEntries.map(({asset, docId}) => ({
+          path: asset.path,
+          size: Number(asset?.blob?.size) || 0,
+          docId,
+        }));
+      }
+      if (resourceFailures > 0) {
+        this.notify(t("siyuanShare.message.resourcesSkipped", {count: resourceFailures}));
+      }
       const slug = sanitizeSlug(slugOverride);
       if (slug) payload.slug = slug;
       if (clearPassword) {
@@ -3342,20 +3532,6 @@ class SiYuanSharePlugin extends Plugin {
         payload.clearVisitorLimit = true;
       } else if (Number.isFinite(visitorLimit)) {
         payload.visitorLimit = Math.max(0, Math.floor(visitorLimit));
-      }
-      const seenAssets = new Set();
-      const assetEntries = [];
-      const assetManifest = [];
-      for (const asset of assets) {
-        const assetPath = asset?.path || "";
-        if (!assetPath || seenAssets.has(assetPath)) continue;
-        seenAssets.add(assetPath);
-        assetEntries.push({asset, docId});
-        assetManifest.push({
-          path: assetPath,
-          size: Number(asset?.blob?.size) || 0,
-          docId,
-        });
       }
       progress.update(t("siyuanShare.progress.uploadingContent"));
       let requestError = null;
@@ -3413,6 +3589,8 @@ class SiYuanSharePlugin extends Plugin {
         if (syncError) throw syncError;
         throw new Error(t("siyuanShare.error.shareCreateFailed"));
       }
+      this.shareOptions[String(share.id)] = !!includeChildren;
+      await this.saveData(STORAGE_SHARE_OPTIONS, this.shareOptions);
       await this.updateSharePasswordCache(share.id, {password, clearPassword});
       if (requestError) {
         console.warn("shareDoc response error, but share exists after sync", requestError);
@@ -3692,6 +3870,204 @@ class SiYuanSharePlugin extends Plugin {
     return {docs: [], title: ""};
   }
 
+  async resolveNotebookIdFromDoc(docId) {
+    if (!isValidDocId(docId)) return "";
+    const row = await this.fetchBlockRow(docId);
+    const boxId = row?.box ? String(row.box).trim() : "";
+    return isValidNotebookId(boxId) ? boxId : "";
+  }
+
+  collectDocSubtree(docs, rootDocId) {
+    if (!Array.isArray(docs) || !isValidDocId(rootDocId)) return [];
+    const nodes = new Map();
+    const children = new Map();
+    docs.forEach((doc) => {
+      const docId = String(doc?.docId || "").trim();
+      if (!isValidDocId(docId)) return;
+      const parentIdRaw = String(doc?.parentId || "").trim();
+      const parentId = isValidDocId(parentIdRaw) ? parentIdRaw : "";
+      const normalized = {
+        docId,
+        title: String(doc?.title || ""),
+        parentId,
+        sortIndex: Number.isFinite(Number(doc?.sortIndex)) ? Number(doc.sortIndex) : 0,
+        sortOrder: Number.isFinite(Number(doc?.sortOrder)) ? Number(doc.sortOrder) : 0,
+      };
+      nodes.set(docId, normalized);
+      if (!children.has(parentId)) children.set(parentId, []);
+      children.get(parentId).push(docId);
+    });
+    if (!nodes.has(rootDocId)) return [];
+    const included = new Set();
+    const stack = [rootDocId];
+    while (stack.length) {
+      const current = stack.pop();
+      if (!current || included.has(current) || !nodes.has(current)) continue;
+      included.add(current);
+      const kids = children.get(current) || [];
+      kids.forEach((kid) => stack.push(kid));
+    }
+    const out = [];
+    docs.forEach((doc) => {
+      const docId = String(doc?.docId || "").trim();
+      if (!included.has(docId)) return;
+      const node = nodes.get(docId);
+      if (node) out.push(node);
+    });
+    return out;
+  }
+
+  async listDocSubtree(docId) {
+    const notebookId = await this.resolveNotebookIdFromDoc(docId);
+    if (isValidNotebookId(notebookId)) {
+      try {
+        const treeResp = await fetchSyncPost("/api/filetree/getDocTree", {id: notebookId});
+        if (treeResp && treeResp.code === 0) {
+          const nodes = extractDocTreeNodes(treeResp.data);
+          const target = findDocTreeNode(nodes, docId);
+          if (target) {
+            return flattenDocTree([target], []);
+          }
+        }
+      } catch (err) {
+        console.warn("Doc tree lookup failed", err);
+      }
+      const tree = await this.listDocsInNotebook(notebookId);
+      const docs = Array.isArray(tree?.docs) ? tree.docs : Array.isArray(tree) ? tree : [];
+      const subtree = this.collectDocSubtree(docs, docId);
+      if (subtree.length > 1) return subtree;
+    }
+    const sqlSubtree = await this.listDocSubtreeBySQL(docId, notebookId);
+    return sqlSubtree.length ? sqlSubtree : [];
+  }
+
+  async listDocSubtreeBySQL(docId, notebookId) {
+    if (!isValidDocId(docId)) return [];
+    try {
+      const row = await this.fetchBlockRow(docId);
+      const rootPath = row?.path ? String(row.path || "").trim() : "";
+      const rootBox = row?.box ? String(row.box || "").trim() : "";
+      const safeDocId = docId.replace(/'/g, "''");
+      const safeBox = rootBox.replace(/'/g, "''");
+      let bestDocs = [];
+      const normalizeDocRow = (rowItem, index) => {
+        const rowId = String(rowItem?.id || "").trim();
+        if (!isValidDocId(rowId)) return null;
+        const parentIdRaw = String(rowItem?.parent_id || rowItem?.parentId || "").trim();
+        let parentId = isValidDocId(parentIdRaw) ? parentIdRaw : "";
+        if (!parentId) {
+          parentId = deriveParentIdFromPath(rowItem?.path, rowId);
+        }
+        if (parentId === rowId) parentId = "";
+        const sortRaw = Number(rowItem?.sort);
+        return {
+          docId: rowId,
+          title: typeof rowItem?.content === "string" ? rowItem.content : "",
+          parentId,
+          sortIndex: Number.isFinite(sortRaw) ? sortRaw : index,
+          sortOrder: index,
+        };
+      };
+      const considerDocs = (docs) => {
+        if (docs.length > bestDocs.length) bestDocs = docs;
+        return docs.length > 1;
+      };
+      try {
+        const stmt = `WITH RECURSIVE doc_tree(id) AS (
+          SELECT id FROM blocks WHERE id='${safeDocId}'
+          UNION ALL
+          SELECT b.id FROM blocks b JOIN doc_tree t ON b.parent_id = t.id WHERE b.type='d'
+        )
+        SELECT b.id, b.parent_id, b.content, b.sort, b.path FROM blocks b JOIN doc_tree t ON b.id = t.id ORDER BY b.sort`;
+        const resp = await fetchSyncPost("/api/query/sql", {stmt});
+        if (resp && resp.code === 0 && Array.isArray(resp.data)) {
+          const docs = resp.data.map(normalizeDocRow).filter(Boolean);
+          if (considerDocs(docs)) return docs;
+        }
+      } catch (err) {
+        console.warn("Doc subtree recursive SQL failed", err);
+      }
+      if (rootPath) {
+        const safePath = rootPath.replace(/'/g, "''");
+        const pathPrefix = rootPath.endsWith("/") ? rootPath : `${rootPath}/`;
+        const safePrefix = pathPrefix.replace(/'/g, "''");
+        const altPrefix = rootPath.replace(/\.sy$/i, "");
+        const altPrefixValue = altPrefix && altPrefix !== rootPath ? `${altPrefix}/` : "";
+        const safeAltPrefix = altPrefixValue ? altPrefixValue.replace(/'/g, "''") : "";
+        const pathFilter = safeAltPrefix
+          ? `(path='${safePath}' OR path LIKE '${safePrefix}%' OR path LIKE '${safeAltPrefix}%')`
+          : `(path='${safePath}' OR path LIKE '${safePrefix}%')`;
+        const stmt = `SELECT id, parent_id, content, sort, path FROM blocks WHERE type='d' AND ${pathFilter} ORDER BY sort`;
+        const resp = await fetchSyncPost("/api/query/sql", {stmt});
+        if (resp && resp.code === 0 && Array.isArray(resp.data)) {
+          const docs = resp.data.map(normalizeDocRow).filter(Boolean);
+          if (considerDocs(docs)) return docs;
+        }
+      }
+      if (rootBox) {
+        const stmt = `SELECT id, parent_id, content, sort, path FROM blocks WHERE type='d' AND box='${safeBox}' ORDER BY sort`;
+        const resp = await fetchSyncPost("/api/query/sql", {stmt});
+        if (resp && resp.code === 0 && Array.isArray(resp.data)) {
+          const docs = resp.data.map(normalizeDocRow).filter(Boolean);
+          const subtree = this.collectDocSubtree(docs, docId);
+          if (considerDocs(subtree)) return subtree;
+        }
+      }
+      const iterDocs = await this.listDocSubtreeByParentChain(docId, row);
+      if (considerDocs(iterDocs)) return iterDocs;
+      return bestDocs.length ? bestDocs : [];
+    } catch (err) {
+      console.warn("Doc subtree SQL failed", err);
+      return [];
+    }
+  }
+
+  async listDocSubtreeByParentChain(docId, rootRow) {
+    if (!isValidDocId(docId)) return [];
+    const docs = [];
+    const seen = new Set();
+    const queue = [docId];
+    const rootTitle =
+      rootRow && typeof rootRow.content === "string" && rootRow.content ? rootRow.content : "";
+    docs.push({
+      docId,
+      title: rootTitle,
+      parentId: "",
+      sortIndex: 0,
+      sortOrder: 0,
+    });
+    seen.add(docId);
+    let order = 1;
+    while (queue.length) {
+      const chunk = queue.splice(0, 20);
+      const ids = chunk.filter((id) => isValidDocId(id)).map((id) => `'${id.replace(/'/g, "''")}'`);
+      if (!ids.length) continue;
+      const stmt = `SELECT id, parent_id, content, sort FROM blocks WHERE type='d' AND parent_id IN (${ids.join(
+        ",",
+      )}) ORDER BY sort`;
+      const resp = await fetchSyncPost("/api/query/sql", {stmt});
+      if (!resp || resp.code !== 0 || !Array.isArray(resp.data)) continue;
+      resp.data.forEach((rowItem) => {
+        const rowId = String(rowItem?.id || "").trim();
+        if (!isValidDocId(rowId) || seen.has(rowId)) return;
+        seen.add(rowId);
+        const parentIdRaw = String(rowItem?.parent_id || "").trim();
+        const parentId = isValidDocId(parentIdRaw) ? parentIdRaw : "";
+        const sortRaw = Number(rowItem?.sort);
+        docs.push({
+          docId: rowId,
+          title: typeof rowItem?.content === "string" ? rowItem.content : "",
+          parentId,
+          sortIndex: Number.isFinite(sortRaw) ? sortRaw : order,
+          sortOrder: order,
+        });
+        order += 1;
+        queue.push(rowId);
+      });
+    }
+    return docs.length > 1 ? docs : [];
+  }
+
   async updateShare(
     shareId,
     {
@@ -3701,6 +4077,7 @@ class SiYuanSharePlugin extends Plugin {
       clearExpires = false,
       visitorLimit = null,
       clearVisitorLimit = false,
+      includeChildren = null,
     } = {},
   ) {
     const t = this.t.bind(this);
@@ -3720,6 +4097,8 @@ class SiYuanSharePlugin extends Plugin {
       });
       return;
     }
+    const includeChildrenValue =
+      typeof includeChildren === "boolean" ? includeChildren : !!existing.includeChildren;
     await this.shareDoc(existing.docId, {
       slugOverride: existing.slug,
       password,
@@ -3728,6 +4107,7 @@ class SiYuanSharePlugin extends Plugin {
       clearExpires,
       visitorLimit,
       clearVisitorLimit,
+      includeChildren: includeChildrenValue,
       allowRequestError: false,
     });
   }
@@ -3811,6 +4191,11 @@ class SiYuanSharePlugin extends Plugin {
         progressText: t("siyuanShare.progress.deletingShare"),
       });
       await this.syncRemoteShares({silent: true});
+      const key = String(existing.id || "");
+      if (key && Object.prototype.hasOwnProperty.call(this.shareOptions, key)) {
+        delete this.shareOptions[key];
+        await this.saveData(STORAGE_SHARE_OPTIONS, this.shareOptions);
+      }
       this.renderSettingCurrent();
       this.notify(t("siyuanShare.message.deleteSuccess"));
     });
@@ -3876,6 +4261,40 @@ class SiYuanSharePlugin extends Plugin {
       if (!password) return share;
       return {...share, password};
     });
+  }
+
+  applyShareOptions(shares) {
+    if (!Array.isArray(shares)) return shares;
+    const optionMap = this.shareOptions || {};
+    const nextShares = shares.map((share) => {
+      const id = share?.id;
+      if (!id) return share;
+      const key = String(id);
+      if (typeof share.includeChildren === "boolean") {
+        if (optionMap[key] !== share.includeChildren) {
+          optionMap[key] = share.includeChildren;
+        }
+        return share;
+      }
+      if (Object.prototype.hasOwnProperty.call(optionMap, key)) {
+        return {...share, includeChildren: !!optionMap[key]};
+      }
+      return share;
+    });
+    const existingIds = new Set(
+      shares.map((share) => String(share?.id || "")).filter((id) => id !== ""),
+    );
+    let cleaned = false;
+    Object.keys(optionMap).forEach((key) => {
+      if (!existingIds.has(String(key))) {
+        delete optionMap[key];
+        cleaned = true;
+      }
+    });
+    if (cleaned) {
+      this.shareOptions = optionMap;
+    }
+    return nextShares;
   }
 
   async updateSharePasswordCache(shareId, {password = "", clearPassword = false} = {}) {
@@ -4018,11 +4437,15 @@ class SiYuanSharePlugin extends Plugin {
     const activeSiteId = String(this.settings.activeSiteId || "");
     const rawShares = Array.isArray(data?.shares) ? data.shares : [];
     const passwordMap = activeSiteId ? this.collectSharePasswords(this.siteShares?.[activeSiteId]) : {};
-    const shares = this.applySharePasswords(rawShares, passwordMap);
+    const withPasswords = this.applySharePasswords(rawShares, passwordMap);
+    const shares = this.applyShareOptions(withPasswords);
     this.shares = shares;
     if (activeSiteId) {
       this.siteShares[activeSiteId] = shares;
       await this.saveData(STORAGE_SITE_SHARES, this.siteShares);
+    }
+    if (this.shareOptions) {
+      await this.saveData(STORAGE_SHARE_OPTIONS, this.shareOptions);
     }
     this.renderDock();
     this.renderSettingCurrent();

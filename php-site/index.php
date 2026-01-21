@@ -4533,7 +4533,12 @@ function handle_api(string $path): void {
     }
 
     if ($path === '/api/v1/shares' && $_SERVER['REQUEST_METHOD'] === 'GET') {
-        $stmt = $pdo->prepare('SELECT * FROM shares WHERE user_id = :uid AND deleted_at IS NULL ORDER BY updated_at DESC');
+        $stmt = $pdo->prepare('SELECT shares.*, COALESCE(doc_counts.doc_count, 0) AS doc_count
+            FROM shares
+            LEFT JOIN (SELECT share_id, COUNT(*) AS doc_count FROM share_docs GROUP BY share_id) doc_counts
+                ON shares.id = doc_counts.share_id
+            WHERE shares.user_id = :uid AND shares.deleted_at IS NULL
+            ORDER BY shares.updated_at DESC');
         $stmt->execute([':uid' => $user['id']]);
         $shares = [];
         while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
@@ -4549,6 +4554,7 @@ function handle_api(string $path): void {
                 'hasPassword' => !empty($row['password_hash']),
                 'expiresAt' => $row['expires_at'] ? ((int)$row['expires_at'] * 1000) : null,
                 'visitorLimit' => (int)($row['visitor_limit'] ?? 0),
+                'includeChildren' => ((string)($row['type'] ?? '') === 'doc') && ((int)($row['doc_count'] ?? 0) > 1),
                 'path' => '/s/' . $row['slug'],
                 'url' => share_url($row['slug']),
             ];
@@ -4666,14 +4672,30 @@ function handle_api(string $path): void {
         $clearExpires = !empty($meta['clearExpires']);
         $visitorLimit = parse_visitor_limit($meta['visitorLimit'] ?? null);
         $clearVisitorLimit = !empty($meta['clearVisitorLimit']);
-        if ($docId === '' || $markdown === '') {
+        $docs = $meta['docs'] ?? [];
+        $hasDocs = is_array($docs) && count($docs) > 0;
+        if ($docId === '' || (!$hasDocs && $markdown === '')) {
             api_response(400, null, 'Missing document content');
         }
         $bannedWords = get_banned_words();
         if (!empty($bannedWords)) {
-            $hit = find_banned_word($markdown, $bannedWords);
-            if ($hit) {
-                api_response(400, null, '触发违禁词：' . $hit['word']);
+            if ($hasDocs) {
+                foreach ($docs as $doc) {
+                    $docMarkdown = (string)($doc['markdown'] ?? '');
+                    if ($docMarkdown === '') {
+                        continue;
+                    }
+                    $hit = find_banned_word($docMarkdown, $bannedWords);
+                    if ($hit) {
+                        $docTitle = trim((string)($doc['title'] ?? '')) ?: trim((string)($doc['docId'] ?? ''));
+                        api_response(400, null, '触发违禁词：' . $hit['word'] . '（文档：' . $docTitle . '）');
+                    }
+                }
+            } else {
+                $hit = find_banned_word($markdown, $bannedWords);
+                if ($hit) {
+                    api_response(400, null, '触发违禁词：' . $hit['word']);
+                }
             }
         }
         $slug = sanitize_slug((string)($meta['slug'] ?? ''));
@@ -4682,8 +4704,50 @@ function handle_api(string $path): void {
         foreach ($assets as $asset) {
             $assetSize += (int)($asset['size'] ?? 0);
         }
-        $docSize = strlen($markdown);
-        $baseShareSize = $docSize + $assetSize;
+        $docRows = [];
+        $docSizeTotal = 0;
+        if ($hasDocs) {
+            foreach ($docs as $index => $doc) {
+                $rowDocId = trim((string)($doc['docId'] ?? ''));
+                $rowTitle = trim((string)($doc['title'] ?? ''));
+                $rowHpath = (string)($doc['hPath'] ?? '');
+                $rowMarkdown = (string)($doc['markdown'] ?? '');
+                $rowSort = max(0, (int)($doc['sortOrder'] ?? $index));
+                $rowParent = trim((string)($doc['parentId'] ?? ''));
+                $rowSortIndex = (float)($doc['sortIndex'] ?? $index);
+                if ($rowDocId === '') {
+                    continue;
+                }
+                $size = strlen($rowMarkdown);
+                $docSizeTotal += $size;
+                $docRows[] = [
+                    'docId' => $rowDocId,
+                    'title' => $rowTitle ?: $rowDocId,
+                    'hPath' => $rowHpath,
+                    'parentId' => $rowParent,
+                    'sortIndex' => $rowSortIndex,
+                    'markdown' => $rowMarkdown,
+                    'sortOrder' => $rowSort,
+                    'size' => $size,
+                ];
+            }
+            if (empty($docRows)) {
+                api_response(400, null, 'Missing document content');
+            }
+        } else {
+            $docSizeTotal = strlen($markdown);
+            $docRows[] = [
+                'docId' => $docId,
+                'title' => $title ?: $docId,
+                'hPath' => $hPath,
+                'parentId' => null,
+                'sortIndex' => 0,
+                'markdown' => $markdown,
+                'sortOrder' => $sortOrder,
+                'size' => $docSizeTotal,
+            ];
+        }
+        $baseShareSize = $docSizeTotal + $assetSize;
         $stmt = $pdo->prepare('SELECT * FROM shares WHERE user_id = :uid AND type = "doc" AND doc_id = :doc_id ORDER BY id DESC LIMIT 1');
         $stmt->execute([':uid' => $user['id'], ':doc_id' => $docId]);
         $existing = $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
@@ -4766,21 +4830,23 @@ function handle_api(string $path): void {
             ':created_at' => now(),
             ':updated_at' => now(),
         ]);
-        $stmt = $pdo->prepare('INSERT INTO share_upload_docs (upload_id, doc_id, title, hpath, parent_id, sort_index, markdown, sort_order, size_bytes, created_at, updated_at)
+        $insertDoc = $pdo->prepare('INSERT INTO share_upload_docs (upload_id, doc_id, title, hpath, parent_id, sort_index, markdown, sort_order, size_bytes, created_at, updated_at)
             VALUES (:upload_id, :doc_id, :title, :hpath, :parent_id, :sort_index, :markdown, :sort_order, :size_bytes, :created_at, :updated_at)');
-        $stmt->execute([
-            ':upload_id' => $uploadId,
-            ':doc_id' => $docId,
-            ':title' => $finalTitle,
-            ':hpath' => $hPath,
-            ':parent_id' => null,
-            ':sort_index' => 0,
-            ':markdown' => $markdown,
-            ':sort_order' => $sortOrder,
-            ':size_bytes' => $docSize,
-            ':created_at' => now(),
-            ':updated_at' => now(),
-        ]);
+        foreach ($docRows as $row) {
+            $insertDoc->execute([
+                ':upload_id' => $uploadId,
+                ':doc_id' => $row['docId'],
+                ':title' => $row['title'],
+                ':hpath' => $row['hPath'],
+                ':parent_id' => $row['parentId'] !== '' ? $row['parentId'] : null,
+                ':sort_index' => $row['sortIndex'],
+                ':markdown' => $row['markdown'],
+                ':sort_order' => $row['sortOrder'],
+                ':size_bytes' => $row['size'],
+                ':created_at' => now(),
+                ':updated_at' => now(),
+            ]);
+        }
         api_response(200, ['uploadId' => $uploadId, 'slug' => $finalSlug]);
     }
 
@@ -5319,14 +5385,30 @@ function handle_api(string $path): void {
         $clearExpires = !empty($meta['clearExpires']);
         $visitorLimit = parse_visitor_limit($meta['visitorLimit'] ?? null);
         $clearVisitorLimit = !empty($meta['clearVisitorLimit']);
-        if ($docId === '' || $markdown === '') {
+        $docs = $meta['docs'] ?? [];
+        $hasDocs = is_array($docs) && count($docs) > 0;
+        if ($docId === '' || (!$hasDocs && $markdown === '')) {
             api_response(400, null, '缺少文档内容');
         }
         $bannedWords = get_banned_words();
         if (!empty($bannedWords)) {
-            $hit = find_banned_word($markdown, $bannedWords);
-            if ($hit) {
-                api_response(400, null, '触发违禁词：' . $hit['word']);
+            if ($hasDocs) {
+                foreach ($docs as $doc) {
+                    $docMarkdown = (string)($doc['markdown'] ?? '');
+                    if ($docMarkdown === '') {
+                        continue;
+                    }
+                    $hit = find_banned_word($docMarkdown, $bannedWords);
+                    if ($hit) {
+                        $docTitle = trim((string)($doc['title'] ?? '')) ?: trim((string)($doc['docId'] ?? ''));
+                        api_response(400, null, '触发违禁词：' . $hit['word'] . '（文档：' . $docTitle . '）');
+                    }
+                }
+            } else {
+                $hit = find_banned_word($markdown, $bannedWords);
+                if ($hit) {
+                    api_response(400, null, '触发违禁词：' . $hit['word']);
+                }
             }
         }
         $slug = sanitize_slug((string)($meta['slug'] ?? ''));
@@ -5342,8 +5424,50 @@ function handle_api(string $path): void {
         foreach ($entries as $entry) {
             $assetSize += (int)($entry['size'] ?? 0);
         }
-        $docSize = strlen($markdown);
-        $baseShareSize = $docSize + $assetSize;
+        $docRows = [];
+        $docSizeTotal = 0;
+        if ($hasDocs) {
+            foreach ($docs as $index => $doc) {
+                $rowDocId = trim((string)($doc['docId'] ?? ''));
+                $rowTitle = trim((string)($doc['title'] ?? ''));
+                $rowHpath = (string)($doc['hPath'] ?? '');
+                $rowMarkdown = (string)($doc['markdown'] ?? '');
+                $rowSort = max(0, (int)($doc['sortOrder'] ?? $index));
+                $rowParent = trim((string)($doc['parentId'] ?? ''));
+                $rowSortIndex = (float)($doc['sortIndex'] ?? $index);
+                if ($rowDocId === '') {
+                    continue;
+                }
+                $size = strlen($rowMarkdown);
+                $docSizeTotal += $size;
+                $docRows[] = [
+                    'docId' => $rowDocId,
+                    'title' => $rowTitle ?: $rowDocId,
+                    'hPath' => $rowHpath,
+                    'parentId' => $rowParent,
+                    'sortIndex' => $rowSortIndex,
+                    'markdown' => $rowMarkdown,
+                    'sortOrder' => $rowSort,
+                    'size' => $size,
+                ];
+            }
+            if (empty($docRows)) {
+                api_response(400, null, '缺少文档内容');
+            }
+        } else {
+            $docSizeTotal = strlen($markdown);
+            $docRows[] = [
+                'docId' => $docId,
+                'title' => $title ?: $docId,
+                'hPath' => $hPath,
+                'parentId' => null,
+                'sortIndex' => 0,
+                'markdown' => $markdown,
+                'sortOrder' => $sortOrder,
+                'size' => $docSizeTotal,
+            ];
+        }
+        $baseShareSize = $docSizeTotal + $assetSize;
         $stmt = $pdo->prepare('SELECT * FROM shares WHERE user_id = :uid AND type = "doc" AND doc_id = :doc_id ORDER BY id DESC LIMIT 1');
         $stmt->execute([':uid' => $user['id'], ':doc_id' => $docId]);
         $existing = $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
@@ -5456,24 +5580,26 @@ function handle_api(string $path): void {
             seed_share_visitors_from_logs($shareId);
         }
         $pdo->prepare('DELETE FROM share_docs WHERE share_id = :share_id')->execute([':share_id' => $shareId]);
-        $stmt = $pdo->prepare('INSERT INTO share_docs (share_id, doc_id, title, hpath, parent_id, sort_index, markdown, sort_order, size_bytes, created_at, updated_at)
+        $insertDoc = $pdo->prepare('INSERT INTO share_docs (share_id, doc_id, title, hpath, parent_id, sort_index, markdown, sort_order, size_bytes, created_at, updated_at)
             VALUES (:share_id, :doc_id, :title, :hpath, :parent_id, :sort_index, :markdown, :sort_order, :size_bytes, :created_at, :updated_at)');
-        $stmt->execute([
-            ':share_id' => $shareId,
-            ':doc_id' => $docId,
-            ':title' => $title ?: $docId,
-            ':hpath' => $hPath,
-            ':parent_id' => null,
-            ':sort_index' => 0,
-            ':markdown' => $markdown,
-            ':sort_order' => $sortOrder,
-            ':size_bytes' => $docSize,
-            ':created_at' => now(),
-            ':updated_at' => now(),
-        ]);
+        foreach ($docRows as $row) {
+            $insertDoc->execute([
+                ':share_id' => $shareId,
+                ':doc_id' => $row['docId'],
+                ':title' => $row['title'],
+                ':hpath' => $row['hPath'],
+                ':parent_id' => $row['parentId'] !== '' ? $row['parentId'] : null,
+                ':sort_index' => $row['sortIndex'],
+                ':markdown' => $row['markdown'],
+                ':sort_order' => $row['sortOrder'],
+                ':size_bytes' => $row['size'],
+                ':created_at' => now(),
+                ':updated_at' => now(),
+            ]);
+        }
 
         $actualAssets = handle_asset_uploads($shareId, $entries);
-        $finalSize = $docSize + $actualAssets + share_comment_size($shareId) + share_comment_asset_size($shareId);
+        $finalSize = $docSizeTotal + $actualAssets + share_comment_size($shareId) + share_comment_asset_size($shareId);
         $stmt = $pdo->prepare('UPDATE shares SET size_bytes = :size_bytes, updated_at = :updated_at WHERE id = :id');
         $stmt->execute([
             ':size_bytes' => $finalSize,
@@ -6132,6 +6258,78 @@ function route_share(string $slug, ?string $docId = null): void {
     $assetBasePath = base_path() . '/uploads/shares/' . $shareId . '/';
 
     if ($share['type'] === 'doc') {
+        $hasMultipleDocs = count($docs) > 1;
+        $activeDocId = $docId ?: (string)($share['doc_id'] ?? ($docs[0]['doc_id'] ?? ''));
+        if ($hasMultipleDocs) {
+            $doc = null;
+            foreach ($docs as $item) {
+                if ((string)($item['doc_id'] ?? '') === (string)$activeDocId) {
+                    $doc = $item;
+                    break;
+                }
+            }
+            if (!$doc && !$docId && !empty($docs)) {
+                $doc = $docs[0];
+                $activeDocId = (string)($doc['doc_id'] ?? '');
+            }
+            if (!$doc) {
+                http_response_code(404);
+                echo '文档不存在。';
+                exit;
+            }
+            $docTitleRaw = trim((string)($doc['title'] ?? '')) ?: $shareTitleRaw;
+            $docTitle = htmlspecialchars($docTitleRaw);
+            $front = extract_front_matter((string)$doc['markdown']);
+            $markdown = rewrite_asset_links((string)$front['body'], $assetBasePath);
+            $markdown = strip_duplicate_title_heading($markdown, $docTitleRaw);
+            $reportTrigger = render_share_report_trigger($share);
+            $shareMetaHtml = render_share_stats($share, $reportTrigger);
+            record_share_access($share, (string)($doc['doc_id'] ?? ''), $docTitleRaw);
+            $commentHtml = render_share_comments($share, $viewer, (string)$activeDocId);
+            $reportModalHtml = render_share_report_form($share, $viewer, (string)$activeDocId);
+            $treeHtml = render_doc_tree(build_doc_tree($docs, $activeDocId), $slug, $activeDocId);
+            $sidebar = '<aside class="kb-sidebar" data-share-sidebar data-share-slug="' . htmlspecialchars($slug) . '">';
+            $sidebar .= '<div class="kb-side-tabs" data-share-tabs data-share-default="tree">';
+            $sidebar .= '<button class="kb-side-tab is-active" type="button" data-share-tab="tree">文档树</button>';
+            $sidebar .= '<button class="kb-side-tab" type="button" data-share-tab="toc">目录</button>';
+            $sidebar .= '</div>';
+            $sidebar .= '<div class="kb-side-panel" data-share-panel="tree">';
+            $sidebar .= '<div class="kb-side-body">' . $treeHtml . '</div>';
+            $sidebar .= '</div>';
+            $sidebar .= '<div class="kb-side-panel" data-share-panel="toc" data-share-toc="doc" hidden>';
+            $sidebar .= '<div class="kb-side-body share-toc-body"></div>';
+            $sidebar .= '</div>';
+            $sidebar .= '</aside>';
+            $base = base_path();
+            $crumbs = build_breadcrumbs((string)($doc['hpath'] ?? ''));
+            if (!empty($crumbs)) {
+                array_pop($crumbs);
+            }
+            $breadcrumbsHtml = '<div class="kb-breadcrumbs"><a class="kb-back" href="' . $base . '/s/' . $slug . '">' . htmlspecialchars($shareTitleRaw) . '</a>';
+            foreach ($crumbs as $crumb) {
+                $breadcrumbsHtml .= '<span>' . htmlspecialchars($crumb) . '</span>';
+            }
+            $breadcrumbsHtml .= '</div>';
+            $content = '<div class="share-shell share-shell--notebook">';
+            $content .= $sidebar;
+            $content .= '<div class="kb-main">';
+            $content .= '<div class="share-article" data-share-view="preview">';
+            $content .= '<div class="kb-header">' . $breadcrumbsHtml;
+            $content .= '<div class="kb-title-row">';
+            $content .= '<h1 class="kb-title">' . $docTitle . '</h1>';
+            $content .= '<button class="button ghost share-view-toggle" type="button" data-share-toggle aria-pressed="false">源码</button>';
+            $content .= '</div>';
+            $content .= $shareMetaHtml;
+            $content .= '</div>';
+            $content .= '<div class="markdown-body" data-md-id="doc">' . render_markdown($markdown) . '</div>';
+            $content .= '<textarea class="markdown-source" data-md-id="doc" readonly spellcheck="false" aria-label="Markdown 源码">' . htmlspecialchars($markdown) . '</textarea>';
+            $content .= $commentHtml;
+            $content .= $reportModalHtml;
+            $content .= '</div></div></div>';
+            render_page($docTitleRaw, $content, null, '', ['layout' => 'share', 'markdown' => true]);
+            return;
+        }
+
         $doc = $docs[0];
         $docTitleRaw = trim((string)($doc['title'] ?? '')) ?: $shareTitleRaw;
         $docTitle = htmlspecialchars($docTitleRaw);
