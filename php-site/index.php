@@ -7751,8 +7751,14 @@ if ($path === '/dashboard') {
                 $logTitle = '未命名';
             }
             $slug = (string)($log['slug'] ?? '');
-            $shareLink = $slug !== '' ? share_url($slug) : '#';
-            $suffix = $slug !== '' ? '/s/' . $slug : '';
+            $docId = trim((string)($log['doc_id'] ?? ''));
+            if ($slug !== '') {
+                $shareLink = $docId !== '' ? base_url() . build_share_redirect_path($slug, $docId, '') : share_url($slug);
+                $suffix = $docId !== '' ? '/s/' . $slug . '/' . $docId : '/s/' . $slug;
+            } else {
+                $shareLink = '#';
+                $suffix = '';
+            }
             $ip = trim((string)($log['ip'] ?? ''));
             if ($ip === '') {
                 $ip = '-';
