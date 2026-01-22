@@ -2425,7 +2425,9 @@
         if (el.closest(".md-diagram, .mermaid, .code-block, .media-scroll")) {
           return;
         }
-        if (el.tagName.toLowerCase() === "svg" && el.ownerSVGElement) return;
+        const tag = el.tagName.toLowerCase();
+        if (tag === "img") return;
+        if (tag === "svg" && el.ownerSVGElement) return;
         const wrapper = document.createElement("div");
         wrapper.className = "media-scroll";
         const parent = el.parentNode;
