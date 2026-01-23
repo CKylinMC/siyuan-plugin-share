@@ -1135,24 +1135,56 @@
         <div class="image-viewer-ui">
           <div class="image-viewer-count" data-viewer-count></div>
           <div class="image-viewer-actions">
-            <button class="image-viewer-btn" type="button" data-viewer-zoom-out aria-label="缩小">
+            <button class="image-viewer-btn" type="button" data-viewer-zoom-out aria-label="\u7f29\u5c0f\u56fe\u7247" title="\u7f29\u5c0f\u56fe\u7247">
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M6 12h12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
               </svg>
             </button>
             <span class="image-viewer-zoom" data-viewer-zoom>100%</span>
-            <button class="image-viewer-btn" type="button" data-viewer-zoom-in aria-label="放大">
+            <button class="image-viewer-btn" type="button" data-viewer-zoom-in aria-label="\u653e\u5927\u56fe\u7247" title="\u653e\u5927\u56fe\u7247">
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M12 6v12M6 12h12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
               </svg>
             </button>
-            <a class="image-viewer-btn" data-viewer-download download>下载</a>
-            <button class="image-viewer-btn" type="button" data-viewer-close>关闭</button>
+            <button class="image-viewer-btn image-viewer-btn-text" type="button" data-viewer-one-to-one aria-label="\u539f\u59cb\u5c3a\u5bf8\uff081:1\uff09" title="\u539f\u59cb\u5c3a\u5bf8\uff081:1\uff09">1:1</button>
+            <button class="image-viewer-btn" type="button" data-viewer-rotate-ccw aria-label="\u9006\u65f6\u9488\u65cb\u8f6c\u0039\u0030\u00b0" title="\u9006\u65f6\u9488\u65cb\u8f6c\u0039\u0030\u00b0">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M3 12a9 9 0 1 0 3-6.708" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                <polyline points="3 4 3 10 9 10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </button>
+            <button class="image-viewer-btn" type="button" data-viewer-rotate-cw aria-label="\u987a\u65f6\u9488\u65cb\u8f6c\u0039\u0030\u00b0" title="\u987a\u65f6\u9488\u65cb\u8f6c\u0039\u0030\u00b0">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M21 12a9 9 0 1 1-3-6.708" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                <polyline points="21 4 21 10 15 10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </button>
+            <a class="image-viewer-btn" data-viewer-download download aria-label="\u4e0b\u8f7d\u56fe\u7247" title="\u4e0b\u8f7d\u56fe\u7247">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                <polyline points="7 10 12 15 17 10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                <line x1="12" y1="15" x2="12" y2="3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+              </svg>
+            </a>
+            <button class="image-viewer-btn" type="button" data-viewer-close aria-label="\u5173\u95ed\u9884\u89c8" title="\u5173\u95ed\u9884\u89c8">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <line x1="6" y1="6" x2="18" y2="18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                <line x1="6" y1="18" x2="18" y2="6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+              </svg>
+            </button>
           </div>
           <div class="image-viewer-stage" data-viewer-stage>
             <img class="image-viewer-img" data-viewer-img alt="">
-            <button class="image-viewer-nav prev" type="button" data-viewer-prev aria-label="上一张">‹</button>
-            <button class="image-viewer-nav next" type="button" data-viewer-next aria-label="下一张">›</button>
+            <button class="image-viewer-nav prev" type="button" data-viewer-prev aria-label="\u4e0a\u4e00\u5f20" title="\u4e0a\u4e00\u5f20">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M15 18l-6-6 6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </button>
+            <button class="image-viewer-nav next" type="button" data-viewer-next aria-label="\u4e0b\u4e00\u5f20" title="\u4e0b\u4e00\u5f20">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M9 18l6-6-6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </button>
           </div>
           <div class="image-viewer-thumbs" data-viewer-thumbs></div>
         </div>
@@ -1165,11 +1197,28 @@
     const zoomOut = viewer.querySelector("[data-viewer-zoom-out]");
     const zoomIn = viewer.querySelector("[data-viewer-zoom-in]");
     const zoomLabel = viewer.querySelector("[data-viewer-zoom]");
+    const oneToOne = viewer.querySelector("[data-viewer-one-to-one]");
+    const rotateCw = viewer.querySelector("[data-viewer-rotate-cw]");
+    const rotateCcw = viewer.querySelector("[data-viewer-rotate-ccw]");
     const download = viewer.querySelector("[data-viewer-download]");
     const prevBtn = viewer.querySelector("[data-viewer-prev]");
     const nextBtn = viewer.querySelector("[data-viewer-next]");
     const thumbs = viewer.querySelector("[data-viewer-thumbs]");
     const count = viewer.querySelector("[data-viewer-count]");
+    let navPositionRaf = 0;
+
+    const scheduleNavPosition = () => {
+      if (!image || !prevBtn || !nextBtn) return;
+      if (navPositionRaf) return;
+      navPositionRaf = requestAnimationFrame(() => {
+        navPositionRaf = 0;
+        const rect = image.getBoundingClientRect();
+        if (!rect.height) return;
+        const centerY = rect.top + rect.height / 2;
+        prevBtn.style.top = `${centerY}px`;
+        nextBtn.style.top = `${centerY}px`;
+      });
+    };
 
     if (image) {
       image.setAttribute("draggable", "false");
@@ -1179,11 +1228,16 @@
       thumbs.addEventListener("pointerdown", (event) => event.stopPropagation());
     }
 
+    const MIN_SCALE = 0.01;
     let items = [];
     let index = 0;
     let scale = 1;
     let translateX = 0;
     let translateY = 0;
+    let rotation = 0;
+    let oneToOneActive = false;
+    let oneToOneScale = 1;
+    let oneToOneRestore = null;
     let isDragging = false;
     let dragMoved = false;
     let suppressClickUntil = 0;
@@ -1192,22 +1246,63 @@
     let dragOriginX = 0;
     let dragOriginY = 0;
 
+    const getViewportSize = () => {
+      if (window.visualViewport) {
+        return {
+          width: window.visualViewport.width,
+          height: window.visualViewport.height,
+        };
+      }
+      return {width: window.innerWidth, height: window.innerHeight};
+    };
+
+    const applyOneToOneScale = () => {
+      if (!image) return;
+      const {width: vw, height: vh} = getViewportSize();
+      const naturalWidth = image.naturalWidth || 1;
+      const naturalHeight = image.naturalHeight || 1;
+      oneToOneScale = Math.min(1, vw / naturalWidth, vh / naturalHeight);
+      scale = oneToOneScale;
+      translateX = 0;
+      translateY = 0;
+      applyTransform();
+      requestAnimationFrame(() => {
+        clampTranslation();
+        applyTransform();
+      });
+    };
+
     const updateZoomLabel = () => {
-      if (zoomLabel) zoomLabel.textContent = `${Math.round(scale * 100)}%`;
+      if (zoomLabel) {
+        zoomLabel.textContent = `${Math.round(scale * 100)}%`;
+      }
+    };
+
+    const clearOneToOne = () => {
+      oneToOneActive = false;
+      oneToOneScale = 1;
+      oneToOneRestore = null;
+      if (image) {
+        image.style.width = "";
+        image.style.height = "";
+        image.style.maxWidth = "";
+        image.style.maxHeight = "";
+      }
     };
 
     const applyTransform = () => {
       if (!image) return;
-      image.style.transform = `translate(${translateX}px, ${translateY}px) scale(${scale})`;
+      image.style.transform = `translate(${translateX}px, ${translateY}px) rotate(${rotation}deg) scale(${scale})`;
       updateZoomLabel();
+      scheduleNavPosition();
     };
 
     const clampTranslation = () => {
       if (!stage || !image) return;
       const stageRect = stage.getBoundingClientRect();
       const imgRect = image.getBoundingClientRect();
-      const baseWidth = imgRect.width / Math.max(scale, 0.01);
-      const baseHeight = imgRect.height / Math.max(scale, 0.01);
+      const baseWidth = imgRect.width / Math.max(scale, MIN_SCALE);
+      const baseHeight = imgRect.height / Math.max(scale, MIN_SCALE);
       const scaledWidth = baseWidth * scale;
       const scaledHeight = baseHeight * scale;
       const maxX = Math.max(0, (scaledWidth - stageRect.width) / 2);
@@ -1217,7 +1312,10 @@
     };
 
     const setScale = (nextScale) => {
-      scale = clamp(nextScale, 0.5, 5);
+      scale = Math.max(nextScale, MIN_SCALE);
+      if (oneToOneActive && Math.abs(scale - oneToOneScale) > 0.001) {
+        clearOneToOne();
+      }
       applyTransform();
       requestAnimationFrame(() => {
         clampTranslation();
@@ -1229,7 +1327,61 @@
       scale = 1;
       translateX = 0;
       translateY = 0;
+      rotation = 0;
+      clearOneToOne();
       applyTransform();
+    };
+
+    const toggleOneToOne = () => {
+      if (!image) return;
+      if (!oneToOneActive) {
+        oneToOneRestore = {
+          scale,
+          translateX,
+          translateY,
+          width: image.style.width,
+          height: image.style.height,
+          maxWidth: image.style.maxWidth,
+          maxHeight: image.style.maxHeight,
+        };
+        const naturalWidth = image.naturalWidth || 1;
+        const naturalHeight = image.naturalHeight || 1;
+        image.style.width = `${naturalWidth}px`;
+        image.style.height = `${naturalHeight}px`;
+        image.style.maxWidth = "none";
+        image.style.maxHeight = "none";
+        oneToOneActive = true;
+        applyOneToOneScale();
+        return;
+      }
+      oneToOneActive = false;
+      oneToOneScale = 1;
+      if (oneToOneRestore) {
+        translateX = oneToOneRestore.translateX || 0;
+        translateY = oneToOneRestore.translateY || 0;
+        scale = oneToOneRestore.scale || 1;
+        image.style.width = oneToOneRestore.width || "";
+        image.style.height = oneToOneRestore.height || "";
+        image.style.maxWidth = oneToOneRestore.maxWidth || "";
+        image.style.maxHeight = oneToOneRestore.maxHeight || "";
+        applyTransform();
+        requestAnimationFrame(() => {
+          clampTranslation();
+          applyTransform();
+        });
+        oneToOneRestore = null;
+      } else {
+        resetZoom();
+      }
+    };
+
+    const rotateBy = (degrees) => {
+      rotation += degrees;
+      applyTransform();
+      requestAnimationFrame(() => {
+        clampTranslation();
+        applyTransform();
+      });
     };
 
     const updateThumbs = () => {
@@ -1334,32 +1486,126 @@
     if (nextBtn) nextBtn.addEventListener("click", () => setIndex(index + 1));
     if (zoomIn) zoomIn.addEventListener("click", () => setScale(scale + 0.25));
     if (zoomOut) zoomOut.addEventListener("click", () => setScale(scale - 0.25));
+    if (oneToOne) oneToOne.addEventListener("click", toggleOneToOne);
+    if (rotateCw) rotateCw.addEventListener("click", () => rotateBy(90));
+    if (rotateCcw) rotateCcw.addEventListener("click", () => rotateBy(-90));
 
-    const startDrag = (event) => {
-      if (!stage || scale <= 1) return;
+    viewer.addEventListener(
+      "wheel",
+      (event) => {
+        if (viewer.hidden) return;
+        event.preventDefault();
+        const zoomFactor = Math.exp(-event.deltaY * 0.002);
+        setScale(scale * zoomFactor);
+      },
+      {passive: false},
+    );
+
+    document.addEventListener("keydown", (event) => {
+      if (viewer.hidden) return;
+      const target = event.target;
+      if (target && ["INPUT", "TEXTAREA"].includes(target.tagName)) return;
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        setScale(scale * 1.1);
+      } else if (event.key === "ArrowDown") {
+        event.preventDefault();
+        setScale(scale * 0.9);
+      }
+    });
+
+    window.addEventListener("resize", () => {
+      if (viewer.hidden) return;
+      if (oneToOneActive) {
+        applyOneToOneScale();
+      } else {
+        scheduleNavPosition();
+      }
+    });
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener("resize", () => {
+        if (viewer.hidden) return;
+        if (oneToOneActive) {
+          applyOneToOneScale();
+        } else {
+          scheduleNavPosition();
+        }
+      });
+    }
+
+    const pointers = new Map();
+    let isPinching = false;
+    let pinchStartDistance = 0;
+    let pinchStartScale = 1;
+    let dragPointerId = null;
+
+    const getPointerDistance = (a, b) =>
+      Math.hypot(b.x - a.x, b.y - a.y);
+
+    const canDrag = () => {
+      if (!stage || !image) return false;
+      const stageRect = stage.getBoundingClientRect();
+      const imgRect = image.getBoundingClientRect();
+      return (
+        scale > 1 ||
+        imgRect.width > stageRect.width ||
+        imgRect.height > stageRect.height
+      );
+    };
+
+    const onPointerDown = (event) => {
+      if (!stage || !image) return;
       const target = event.target;
       if (target && target.closest(".image-viewer-nav")) return;
       if (target && target.closest(".image-viewer-actions")) return;
       if (event.button !== undefined && event.button !== 0) return;
-      isDragging = true;
-      dragMoved = false;
-      dragStartX = event.clientX;
-      dragStartY = event.clientY;
-      dragOriginX = translateX;
-      dragOriginY = translateY;
-      stage.classList.add("is-dragging");
+      pointers.set(event.pointerId, {x: event.clientX, y: event.clientY});
       if (stage.setPointerCapture) {
         stage.setPointerCapture(event.pointerId);
       }
-      event.preventDefault();
+      if (pointers.size === 2) {
+        isPinching = true;
+        isDragging = false;
+        dragPointerId = null;
+        const [p1, p2] = Array.from(pointers.values());
+        pinchStartDistance = getPointerDistance(p1, p2);
+        pinchStartScale = scale;
+        event.preventDefault();
+        return;
+      }
+      if (pointers.size === 1 && canDrag()) {
+        isDragging = true;
+        dragPointerId = event.pointerId;
+        dragMoved = false;
+        dragStartX = event.clientX;
+        dragStartY = event.clientY;
+        dragOriginX = translateX;
+        dragOriginY = translateY;
+        stage.classList.add("is-dragging");
+        event.preventDefault();
+      }
     };
 
-    const onDrag = (event) => {
-      if (!isDragging) return;
+    const onPointerMove = (event) => {
+      if (!pointers.has(event.pointerId)) return;
+      pointers.set(event.pointerId, {x: event.clientX, y: event.clientY});
+      if (isPinching && pointers.size >= 2) {
+        const [p1, p2] = Array.from(pointers.values());
+        const distance = getPointerDistance(p1, p2);
+        if (pinchStartDistance > 0) {
+          setScale(pinchStartScale * (distance / pinchStartDistance));
+        }
+        event.preventDefault();
+        return;
+      }
+      if (!isDragging || event.pointerId !== dragPointerId) return;
       const deltaX = event.clientX - dragStartX;
       const deltaY = event.clientY - dragStartY;
       if (!dragMoved && (Math.abs(deltaX) > 3 || Math.abs(deltaY) > 3)) {
         dragMoved = true;
+        if (oneToOneActive) {
+          clearOneToOne();
+        }
       }
       translateX = dragOriginX + deltaX;
       translateY = dragOriginY + deltaY;
@@ -1367,24 +1613,31 @@
       applyTransform();
     };
 
-    const endDrag = (event) => {
-      if (!isDragging) return;
-      isDragging = false;
-      if (stage) stage.classList.remove("is-dragging");
+    const onPointerUp = (event) => {
+      pointers.delete(event.pointerId);
       if (stage && stage.releasePointerCapture) {
         stage.releasePointerCapture(event.pointerId);
       }
+      if (isPinching && pointers.size < 2) {
+        isPinching = false;
+        pinchStartDistance = 0;
+        pinchStartScale = scale;
+      }
+      if (!isDragging || event.pointerId !== dragPointerId) return;
+      isDragging = false;
+      dragPointerId = null;
+      if (stage) stage.classList.remove("is-dragging");
       if (dragMoved) {
         suppressClickUntil = Date.now() + 320;
       }
     };
 
     if (stage) {
-      stage.addEventListener("pointerdown", startDrag);
+      stage.addEventListener("pointerdown", onPointerDown);
     }
-    window.addEventListener("pointermove", onDrag);
-    window.addEventListener("pointerup", endDrag);
-    window.addEventListener("pointercancel", endDrag);
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp);
+    window.addEventListener("pointercancel", onPointerUp);
 
     document.addEventListener("keydown", (event) => {
       if (viewer.hidden) return;

@@ -2544,6 +2544,11 @@ body.share-side-open .share-side-backdrop {
   border-radius: 12px;
 }
 
+body.layout-share .markdown-body img,
+body.layout-share .comment-content img {
+  max-width: 80%;
+}
+
 .markdown-body .mermaid {
   background: #ffffff;
   border-radius: 12px;
@@ -2821,7 +2826,7 @@ body.image-viewer-open {
 .image-viewer-ui {
   position: relative;
   height: 100%;
-  padding: 28px 32px;
+  padding: 0;
 }
 
 .image-viewer-count {
@@ -2844,24 +2849,33 @@ body.image-viewer-open {
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+  padding: 6px;
+  border-radius: 999px;
+  background: rgba(8, 10, 18, 0.55);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(8px);
   z-index: 2;
 }
 
 .image-viewer-btn {
   appearance: none;
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  background: rgba(15, 23, 42, 0.72);
   color: #fff;
   border-radius: 999px;
-  padding: 6px 10px;
+  width: 36px;
+  height: 36px;
+  padding: 0;
   cursor: pointer;
   font-size: 0.85rem;
   font-weight: 600;
+  line-height: 1;
   text-decoration: none;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.35);
 }
 
 .image-viewer-btn:hover {
@@ -2869,9 +2883,16 @@ body.image-viewer-open {
 }
 
 .image-viewer-btn svg {
-  width: 16px;
-  height: 16px;
+  width: 18px;
+  height: 18px;
   display: block;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.6));
+}
+
+.image-viewer-btn-text {
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.2px;
 }
 
 .image-viewer-zoom {
@@ -2881,23 +2902,24 @@ body.image-viewer-open {
 }
 
 .image-viewer-stage {
-  position: relative;
+  position: fixed;
+  inset: 0;
   width: 100%;
   height: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
   overflow: hidden;
-  padding: 20px 20px 88px;
-  border-radius: 18px;
+  padding: 0;
+  border-radius: 0;
   cursor: grab;
   touch-action: none;
   z-index: 1;
 }
 
 .image-viewer-img {
-  max-width: min(90vw, 1200px);
-  max-height: calc(100vh - 200px);
+  max-width: 100%;
+  max-height: 100%;
   width: auto;
   height: auto;
   border-radius: 12px;
@@ -2917,7 +2939,7 @@ body.image-viewer-open {
 }
 
 .image-viewer-nav {
-  position: absolute;
+  position: fixed;
   top: 50%;
   transform: translateY(-50%);
   width: 44px;
@@ -2926,9 +2948,18 @@ body.image-viewer-open {
   border: none;
   background: rgba(0, 0, 0, 0.45);
   color: #fff;
-  font-size: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
   cursor: pointer;
   z-index: 2;
+}
+
+.image-viewer-nav svg {
+  width: 18px;
+  height: 18px;
+  display: block;
 }
 
 .image-viewer-nav.prev {
