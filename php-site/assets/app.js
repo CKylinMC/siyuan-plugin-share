@@ -275,14 +275,25 @@
 
         const row = document.createElement("div");
         row.className = "share-toc-row";
-        const spacer = document.createElement("span");
-        spacer.className = "share-toc-spacer";
-        row.appendChild(spacer);
 
         const link = document.createElement("a");
         link.className = "share-toc-link";
         link.href = `#${node.id}`;
-        link.textContent = node.heading.textContent || "未命名";
+        link.setAttribute("draggable", "false");
+
+        const levelBadge = document.createElement("span");
+        levelBadge.className = "share-toc-level";
+        levelBadge.textContent = "H";
+        const levelNum = document.createElement("span");
+        levelNum.className = "share-toc-level-num";
+        levelNum.textContent = String(node.level);
+        levelBadge.appendChild(levelNum);
+        link.appendChild(levelBadge);
+
+        const linkText = document.createElement("span");
+        linkText.className = "share-toc-text";
+        linkText.textContent = node.heading.textContent || "未命名";
+        link.appendChild(linkText);
         row.appendChild(link);
         item.appendChild(row);
 
@@ -333,7 +344,82 @@
       const list = renderTree(nodes, 0);
       body.appendChild(list);
 
+      const dragState = {
+        isDown: false,
+        isDragging: false,
+        startX: 0,
+        scrollLeft: 0,
+        suppressUntil: 0,
+      };
+      const dragThreshold = 3;
+
+      const onMouseDown = (event) => {
+        if (event.button !== 0) return;
+        dragState.isDown = true;
+        dragState.isDragging = false;
+        dragState.startX = event.clientX;
+        dragState.scrollLeft = scrollBox.scrollLeft;
+      };
+
+      const onMouseMove = (event) => {
+        if (!dragState.isDown) return;
+        const deltaX = event.clientX - dragState.startX;
+        if (!dragState.isDragging && Math.abs(deltaX) >= dragThreshold) {
+          dragState.isDragging = true;
+        }
+        if (dragState.isDragging) {
+          scrollBox.scrollLeft = dragState.scrollLeft - deltaX;
+        }
+      };
+
+      const stopDrag = () => {
+        if (!dragState.isDown) return;
+        dragState.isDown = false;
+        if (dragState.isDragging) {
+          dragState.suppressUntil = Date.now() + 250;
+        }
+        dragState.isDragging = false;
+      };
+
+      scrollBox.addEventListener("mousedown", onMouseDown);
+      scrollBox.addEventListener("mousemove", onMouseMove);
+      scrollBox.addEventListener("mouseup", stopDrag);
+      scrollBox.addEventListener("mouseleave", stopDrag);
+      scrollBox.addEventListener("dragstart", (event) => {
+        event.preventDefault();
+      });
+      scrollBox.addEventListener(
+        "click",
+        (event) => {
+          if (Date.now() < dragState.suppressUntil) {
+            event.preventDefault();
+            event.stopPropagation();
+          }
+        },
+        true,
+      );
+
       const linkMap = new Map();
+      const activeLock = {
+        id: "",
+        until: 0,
+        scrollEndTimer: 0,
+        scrollTicking: false,
+        scrollOffset: 0,
+      };
+      const setActiveLink = (link) => {
+        body.querySelectorAll(".share-toc-link").forEach((item) => {
+          item.classList.remove("is-active");
+        });
+        body.querySelectorAll(".share-toc-row").forEach((row) => {
+          row.classList.remove("is-active");
+        });
+        if (link) {
+          link.classList.add("is-active");
+          const row = link.closest(".share-toc-row");
+          if (row) row.classList.add("is-active");
+        }
+      };
       body.querySelectorAll(".share-toc-link").forEach((link) => {
         const href = link.getAttribute("href") || "";
         if (href.startsWith("#")) {
@@ -342,36 +428,108 @@
       });
       body.querySelectorAll(".share-toc-link").forEach((link) => {
         link.addEventListener("click", (event) => {
+          if (Date.now() < dragState.suppressUntil) {
+            event.preventDefault();
+            return;
+          }
           const href = link.getAttribute("href") || "";
           if (!href.startsWith("#")) return;
           const target = document.getElementById(href.slice(1));
           if (!target) return;
           event.preventDefault();
+          activeLock.id = target.id;
+          activeLock.until = Date.now() + 1200;
           target.scrollIntoView({behavior: "smooth", block: "start"});
           history.replaceState(null, "", href);
-          linkMap.forEach((item) => item.classList.remove("is-active"));
-          link.classList.add("is-active");
+          setActiveLink(link);
           ensureVisible(link);
         });
       });
 
-      if ("IntersectionObserver" in window && linkMap.size) {
-        const observer = new IntersectionObserver(
-          (entries) => {
-            const visible = entries
-              .filter((entry) => entry.isIntersecting)
-              .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
-            if (!visible) return;
-            const link = linkMap.get(visible.target.id);
-            if (!link) return;
-            linkMap.forEach((item) => item.classList.remove("is-active"));
-            link.classList.add("is-active");
-            ensureVisible(link);
-          },
-          {rootMargin: "-20% 0px -70% 0px", threshold: [0, 0.5, 1]},
-        );
-        headings.forEach((heading) => observer.observe(heading));
-      }
+      const getScrollOffset = () => {
+        const sample = headings[0];
+        if (!sample) return 0;
+        const raw = window.getComputedStyle(sample).scrollMarginTop;
+        const value = Number.parseFloat(raw || "0");
+        if (Number.isFinite(value) && value > 0) return value;
+        return document.body.classList.contains("layout-share") ? 120 : 0;
+      };
+      activeLock.scrollOffset = getScrollOffset();
+      const activeThreshold = 8;
+
+      const pickActiveHeading = () => {
+        if (!headings.length) return null;
+        const offset = activeLock.scrollOffset || 0;
+        let current = headings[0];
+        for (const heading of headings) {
+          const top = heading.getBoundingClientRect().top;
+          if (top - offset <= activeThreshold) {
+            current = heading;
+          } else {
+            break;
+          }
+        }
+        return current;
+      };
+
+      const updateActiveByScroll = () => {
+        if (activeLock.id && Date.now() < activeLock.until) {
+          const locked = linkMap.get(activeLock.id);
+          if (locked) {
+            setActiveLink(locked);
+            ensureVisible(locked);
+            return;
+          }
+        }
+        if (activeLock.id) {
+          const target = document.getElementById(activeLock.id);
+          if (target) {
+            const offset = activeLock.scrollOffset || 0;
+            const distance = Math.abs(target.getBoundingClientRect().top - offset);
+            if (distance <= activeThreshold) {
+              activeLock.id = "";
+              activeLock.until = 0;
+            } else {
+              const locked = linkMap.get(activeLock.id);
+              if (locked) {
+                setActiveLink(locked);
+                ensureVisible(locked);
+                return;
+              }
+            }
+          } else {
+            activeLock.id = "";
+            activeLock.until = 0;
+          }
+        }
+        const active = pickActiveHeading();
+        if (!active) return;
+        const link = linkMap.get(active.id);
+        if (!link) return;
+        setActiveLink(link);
+        ensureVisible(link);
+      };
+
+      const onScroll = () => {
+        if (!activeLock.scrollTicking) {
+          activeLock.scrollTicking = true;
+          requestAnimationFrame(() => {
+            activeLock.scrollTicking = false;
+            updateActiveByScroll();
+          });
+        }
+        clearTimeout(activeLock.scrollEndTimer);
+        activeLock.scrollEndTimer = window.setTimeout(() => {
+          updateActiveByScroll();
+        }, 160);
+      };
+
+      window.addEventListener("scroll", onScroll, {passive: true});
+      window.addEventListener("resize", () => {
+        activeLock.scrollOffset = getScrollOffset();
+        updateActiveByScroll();
+      });
+      updateActiveByScroll();
     });
   };
 
@@ -419,7 +577,10 @@
       document.body.classList.toggle("share-side-open", open);
     };
     if (openBtn) {
-      openBtn.addEventListener("click", () => setOpen(true));
+      openBtn.addEventListener("click", () => {
+        const isOpen = document.body.classList.contains("share-side-open");
+        setOpen(!isOpen);
+      });
     }
     if (backdrop) {
       backdrop.addEventListener("click", () => setOpen(false));
@@ -473,7 +634,10 @@
       document.body.classList.toggle("app-side-open", open);
     };
     if (openBtn) {
-      openBtn.addEventListener("click", () => setOpen(true));
+      openBtn.addEventListener("click", () => {
+        const isOpen = document.body.classList.contains("app-side-open");
+        setOpen(!isOpen);
+      });
     }
     if (backdrop) {
       backdrop.addEventListener("click", () => setOpen(false));
@@ -1212,11 +1376,8 @@
       if (navPositionRaf) return;
       navPositionRaf = requestAnimationFrame(() => {
         navPositionRaf = 0;
-        const rect = image.getBoundingClientRect();
-        if (!rect.height) return;
-        const centerY = rect.top + rect.height / 2;
-        prevBtn.style.top = `${centerY}px`;
-        nextBtn.style.top = `${centerY}px`;
+        prevBtn.style.top = "";
+        nextBtn.style.top = "";
       });
     };
 
@@ -1258,10 +1419,17 @@
 
     const applyOneToOneScale = () => {
       if (!image) return;
-      const {width: vw, height: vh} = getViewportSize();
-      const naturalWidth = image.naturalWidth || 1;
-      const naturalHeight = image.naturalHeight || 1;
-      oneToOneScale = Math.min(1, vw / naturalWidth, vh / naturalHeight);
+      const naturalWidth = image.naturalWidth || 0;
+      const naturalHeight = image.naturalHeight || 0;
+      if (!naturalWidth || !naturalHeight) return;
+      const rect = image.getBoundingClientRect();
+      const baseWidth =
+        image.offsetWidth || rect.width / Math.max(scale, MIN_SCALE);
+      const baseHeight =
+        image.offsetHeight || rect.height / Math.max(scale, MIN_SCALE);
+      const ratioW = baseWidth ? naturalWidth / baseWidth : 1;
+      const ratioH = baseHeight ? naturalHeight / baseHeight : 1;
+      oneToOneScale = Math.max(ratioW, ratioH);
       scale = oneToOneScale;
       translateX = 0;
       translateY = 0;
@@ -1344,12 +1512,6 @@
           maxWidth: image.style.maxWidth,
           maxHeight: image.style.maxHeight,
         };
-        const naturalWidth = image.naturalWidth || 1;
-        const naturalHeight = image.naturalHeight || 1;
-        image.style.width = `${naturalWidth}px`;
-        image.style.height = `${naturalHeight}px`;
-        image.style.maxWidth = "none";
-        image.style.maxHeight = "none";
         oneToOneActive = true;
         applyOneToOneScale();
         return;
@@ -1547,6 +1709,7 @@
       const stageRect = stage.getBoundingClientRect();
       const imgRect = image.getBoundingClientRect();
       return (
+        oneToOneActive ||
         scale > 1 ||
         imgRect.width > stageRect.width ||
         imgRect.height > stageRect.height
@@ -1603,9 +1766,6 @@
       const deltaY = event.clientY - dragStartY;
       if (!dragMoved && (Math.abs(deltaX) > 3 || Math.abs(deltaY) > 3)) {
         dragMoved = true;
-        if (oneToOneActive) {
-          clearOneToOne();
-        }
       }
       translateX = dragOriginX + deltaX;
       translateY = dragOriginY + deltaY;

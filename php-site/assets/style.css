@@ -1993,6 +1993,7 @@ body.app-side-open {
   min-height: 0;
   scroll-behavior: smooth;
   scrollbar-width: none;
+  user-select: text;
 }
 
 .share-toc-body:hover,
@@ -2028,10 +2029,12 @@ body.app-side-open {
   min-width: 100%;
   width: max-content;
   gap: 4px;
+  --toc-offset: 0px;
 }
 
 .share-toc-children {
-  padding-left: 12px;
+  padding-left: 18px;
+  --toc-offset: calc(var(--toc-offset) + 18px);
 }
 
 .share-toc-node {
@@ -2042,10 +2045,23 @@ body.app-side-open {
   display: flex;
   align-items: center;
   gap: 2px;
+  position: relative;
+  width: 100%;
 }
 
-.share-toc-toggle,
-.share-toc-spacer {
+.share-toc-row::before {
+  content: "";
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  left: 0;
+  width: 2px;
+  border-radius: 2px;
+  background: transparent;
+  pointer-events: none;
+}
+
+.share-toc-toggle {
   width: 16px;
   height: 16px;
   display: inline-flex;
@@ -2081,29 +2097,59 @@ body.app-side-open {
 }
 
 .share-toc-link {
-  display: block;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
   padding: 3px 6px;
   border-radius: 8px;
   color: var(--text);
   border: 1px solid transparent;
   flex: 1;
   white-space: nowrap;
-  transition: background 160ms ease, color 160ms ease, border-color 160ms ease, transform 160ms ease;
+  transition: color 160ms ease;
   font-size: 0.8rem;
+  line-height: 1.4;
+  position: relative;
+  z-index: 1;
+}
+
+.share-toc-level {
+  font-size: 0.75rem;
+  font-weight: 400;
+  color: #8a94b8;
+  line-height: 1;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: baseline;
+}
+
+.share-toc-level-num {
+  color: #5a7bff;
+  font-size: 0.7em;
+  vertical-align: baseline;
+  position: relative;
+  top: 0.12em;
+}
+
+.share-toc-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .share-toc-link:hover {
   text-decoration: none;
-  border-color: #dbe3ff;
-  background: #f1f5ff;
-  transform: translateX(2px);
 }
 
 .share-toc-link.is-active {
-  background: #e9eeff;
   color: var(--primary-700);
   font-weight: 600;
-  border-color: #dbe3ff;
+}
+
+.share-toc-row.is-active::before {
+  background: #5a7bff;
 }
 
 .share-toc-empty {
