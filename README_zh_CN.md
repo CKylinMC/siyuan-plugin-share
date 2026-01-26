@@ -93,14 +93,15 @@
 ---
 
 ### ② 分享文档 / 笔记本
+仅以分享笔记本为例，分享单篇文档或文档及子文档也可以
 
-![分享文档](https://github.com/user-attachments/assets/8bd33e72-4b09-43f3-8fe5-e81f9b39baf9)
+![分享笔记本](https://github.com/user-attachments/assets/62faf774-16e7-4b48-9dff-d738749ee4d5)
 
 ---
 
 ### ③ 打开分享链接查看内容
 
-![打开分享文档](https://github.com/user-attachments/assets/490f459c-caac-4859-860c-e00de4356706)
+![打开分享链接](https://github.com/user-attachments/assets/155ee85c-1a73-49e4-b03e-69b9a31f2727)
 
 ---
 
@@ -158,3 +159,4 @@
   
 - 💖 赞助列表：  
 [Sponsor List](https://github.com/b8l8u8e8/siyuan-plugin-share/blob/main/sponsor-list.md)
+
