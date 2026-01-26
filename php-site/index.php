@@ -165,6 +165,7 @@ function migrate(PDO $pdo): void {
         share_id INTEGER NOT NULL,
         doc_id TEXT NOT NULL,
         title TEXT NOT NULL,
+        icon TEXT,
         hpath TEXT,
         parent_id TEXT,
         sort_index INTEGER NOT NULL DEFAULT 0,
@@ -214,6 +215,7 @@ function migrate(PDO $pdo): void {
         upload_id TEXT NOT NULL,
         doc_id TEXT NOT NULL,
         title TEXT NOT NULL,
+        icon TEXT,
         hpath TEXT,
         parent_id TEXT,
         sort_index INTEGER NOT NULL DEFAULT 0,
@@ -375,7 +377,9 @@ function migrate(PDO $pdo): void {
     ensure_column($pdo, 'shares', 'comment_notify', 'INTEGER NOT NULL DEFAULT 0');
     ensure_column($pdo, 'share_reports', 'report_email', 'TEXT');
     ensure_column($pdo, 'share_uploads', 'visitor_limit', 'INTEGER NOT NULL DEFAULT 0');
+    ensure_column($pdo, 'share_upload_docs', 'icon', 'TEXT');
     ensure_column($pdo, 'share_docs', 'size_bytes', 'INTEGER NOT NULL DEFAULT 0');
+    ensure_column($pdo, 'share_docs', 'icon', 'TEXT');
     ensure_column($pdo, 'share_docs', 'sort_order', 'INTEGER NOT NULL DEFAULT 0');
     ensure_column($pdo, 'share_docs', 'parent_id', 'TEXT');
     ensure_column($pdo, 'share_docs', 'sort_index', 'INTEGER NOT NULL DEFAULT 0');
@@ -1065,6 +1069,27 @@ function mb_from_bytes(int $bytes): int {
     return (int)floor($bytes / 1024 / 1024);
 }
 
+function render_share_icon_defs(): string {
+    return <<<'SVG'
+<svg class="kb-icon-defs" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" style="position:absolute;width:0;height:0;overflow:hidden">
+  <symbol id="sps-tree-arrow-collapsed" viewBox="0 0 24 24" fill="none">
+    <path d="M9 18L15 12L9 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  </symbol>
+  <symbol id="sps-tree-arrow-expanded" viewBox="0 0 24 24" fill="none">
+    <path d="M6 9L12 15L18 9" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  </symbol>
+  <symbol id="sps-tree-collapse-all" viewBox="0 0 24 24" fill="none">
+    <path d="M4 20L11 13M11 13V17M11 13H7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M20 4L13 11M13 11V7M13 11H17" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  </symbol>
+  <symbol id="sps-tree-expand-all" viewBox="0 0 24 24" fill="none">
+    <path d="M11 13L4 20M4 20V16M4 20H8" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M13 11L20 4M20 4V8M20 4H16" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  </symbol>
+</svg>
+SVG;
+}
+
 function render_page(string $title, string $content, ?array $user = null, string $baseHref = '', array $options = []): void {
     global $config;
     $base = base_path();
@@ -1107,6 +1132,7 @@ function render_page(string $title, string $content, ?array $user = null, string
         echo "</div>";
     } elseif ($layout === 'share') {
         echo "<div class='share-page'>";
+        echo render_share_icon_defs();
         echo $content;
         echo "<footer class='share-footer'>由 <a href='https://github.com/b8l8u8e8/siyuan-plugin-share' target='_blank' rel='noopener noreferrer'>b8l8u8e8</a> 提供支持</footer>";
         echo "<button class='share-side-trigger' type='button' data-share-drawer-open aria-label='打开侧边栏'><svg viewBox='0 0 24 24' aria-hidden='true'><path fill='currentColor' d='M4 6h16v2H4zM4 11h16v2H4zM4 16h16v2H4z'/></svg><span>导航</span></button>";
@@ -4710,6 +4736,7 @@ function handle_api(string $path): void {
             foreach ($docs as $index => $doc) {
                 $rowDocId = trim((string)($doc['docId'] ?? ''));
                 $rowTitle = trim((string)($doc['title'] ?? ''));
+                $rowIcon = trim((string)($doc['icon'] ?? ''));
                 $rowHpath = (string)($doc['hPath'] ?? '');
                 $rowMarkdown = (string)($doc['markdown'] ?? '');
                 $rowSort = max(0, (int)($doc['sortOrder'] ?? $index));
@@ -4723,6 +4750,7 @@ function handle_api(string $path): void {
                 $docRows[] = [
                     'docId' => $rowDocId,
                     'title' => $rowTitle ?: $rowDocId,
+                    'icon' => $rowIcon,
                     'hPath' => $rowHpath,
                     'parentId' => $rowParent,
                     'sortIndex' => $rowSortIndex,
@@ -4736,9 +4764,11 @@ function handle_api(string $path): void {
             }
         } else {
             $docSizeTotal = strlen($markdown);
+            $docIcon = trim((string)($meta['icon'] ?? ''));
             $docRows[] = [
                 'docId' => $docId,
                 'title' => $title ?: $docId,
+                'icon' => $docIcon,
                 'hPath' => $hPath,
                 'parentId' => null,
                 'sortIndex' => 0,
@@ -4830,13 +4860,14 @@ function handle_api(string $path): void {
             ':created_at' => now(),
             ':updated_at' => now(),
         ]);
-        $insertDoc = $pdo->prepare('INSERT INTO share_upload_docs (upload_id, doc_id, title, hpath, parent_id, sort_index, markdown, sort_order, size_bytes, created_at, updated_at)
-            VALUES (:upload_id, :doc_id, :title, :hpath, :parent_id, :sort_index, :markdown, :sort_order, :size_bytes, :created_at, :updated_at)');
+        $insertDoc = $pdo->prepare('INSERT INTO share_upload_docs (upload_id, doc_id, title, icon, hpath, parent_id, sort_index, markdown, sort_order, size_bytes, created_at, updated_at)
+            VALUES (:upload_id, :doc_id, :title, :icon, :hpath, :parent_id, :sort_index, :markdown, :sort_order, :size_bytes, :created_at, :updated_at)');
         foreach ($docRows as $row) {
             $insertDoc->execute([
                 ':upload_id' => $uploadId,
                 ':doc_id' => $row['docId'],
                 ':title' => $row['title'],
+                ':icon' => $row['icon'] !== '' ? $row['icon'] : null,
                 ':hpath' => $row['hPath'],
                 ':parent_id' => $row['parentId'] !== '' ? $row['parentId'] : null,
                 ':sort_index' => $row['sortIndex'],
@@ -4893,6 +4924,7 @@ function handle_api(string $path): void {
         foreach ($docs as $index => $doc) {
             $docId = trim((string)($doc['docId'] ?? ''));
             $docTitle = trim((string)($doc['title'] ?? ''));
+            $docIcon = trim((string)($doc['icon'] ?? ''));
             $docHpath = (string)($doc['hPath'] ?? '');
             $docMarkdown = (string)($doc['markdown'] ?? '');
             $docSort = max(0, (int)($doc['sortOrder'] ?? $index));
@@ -4906,6 +4938,7 @@ function handle_api(string $path): void {
             $docRows[] = [
                 'docId' => $docId,
                 'title' => $docTitle ?: $docId,
+                'icon' => $docIcon,
                 'hPath' => $docHpath,
                 'parentId' => $docParent,
                 'sortIndex' => $docSortIndex,
@@ -5000,13 +5033,14 @@ function handle_api(string $path): void {
             ':created_at' => now(),
             ':updated_at' => now(),
         ]);
-        $stmt = $pdo->prepare('INSERT INTO share_upload_docs (upload_id, doc_id, title, hpath, parent_id, sort_index, markdown, sort_order, size_bytes, created_at, updated_at)
-            VALUES (:upload_id, :doc_id, :title, :hpath, :parent_id, :sort_index, :markdown, :sort_order, :size_bytes, :created_at, :updated_at)');
+        $stmt = $pdo->prepare('INSERT INTO share_upload_docs (upload_id, doc_id, title, icon, hpath, parent_id, sort_index, markdown, sort_order, size_bytes, created_at, updated_at)
+            VALUES (:upload_id, :doc_id, :title, :icon, :hpath, :parent_id, :sort_index, :markdown, :sort_order, :size_bytes, :created_at, :updated_at)');
         foreach ($docRows as $row) {
             $stmt->execute([
                 ':upload_id' => $uploadId,
                 ':doc_id' => $row['docId'],
                 ':title' => $row['title'],
+                ':icon' => $row['icon'] !== '' ? $row['icon'] : null,
                 ':hpath' => $row['hPath'],
                 ':parent_id' => $row['parentId'] !== '' ? $row['parentId'] : null,
                 ':sort_index' => $row['sortIndex'],
@@ -5285,13 +5319,14 @@ function handle_api(string $path): void {
                 }
             }
 
-            $insertDoc = $pdo->prepare('INSERT INTO share_docs (share_id, doc_id, title, hpath, parent_id, sort_index, markdown, sort_order, size_bytes, created_at, updated_at)
-                VALUES (:share_id, :doc_id, :title, :hpath, :parent_id, :sort_index, :markdown, :sort_order, :size_bytes, :created_at, :updated_at)');
+            $insertDoc = $pdo->prepare('INSERT INTO share_docs (share_id, doc_id, title, icon, hpath, parent_id, sort_index, markdown, sort_order, size_bytes, created_at, updated_at)
+                VALUES (:share_id, :doc_id, :title, :icon, :hpath, :parent_id, :sort_index, :markdown, :sort_order, :size_bytes, :created_at, :updated_at)');
             foreach ($docRows as $row) {
                 $insertDoc->execute([
                     ':share_id' => $shareId,
                     ':doc_id' => $row['doc_id'],
                     ':title' => $row['title'],
+                    ':icon' => isset($row['icon']) && trim((string)$row['icon']) !== '' ? $row['icon'] : null,
                     ':hpath' => $row['hpath'],
                     ':parent_id' => $row['parent_id'] ?? null,
                     ':sort_index' => $row['sort_index'] ?? 0,
@@ -5439,6 +5474,7 @@ function handle_api(string $path): void {
             foreach ($docs as $index => $doc) {
                 $rowDocId = trim((string)($doc['docId'] ?? ''));
                 $rowTitle = trim((string)($doc['title'] ?? ''));
+                $rowIcon = trim((string)($doc['icon'] ?? ''));
                 $rowHpath = (string)($doc['hPath'] ?? '');
                 $rowMarkdown = (string)($doc['markdown'] ?? '');
                 $rowSort = max(0, (int)($doc['sortOrder'] ?? $index));
@@ -5452,6 +5488,7 @@ function handle_api(string $path): void {
                 $docRows[] = [
                     'docId' => $rowDocId,
                     'title' => $rowTitle ?: $rowDocId,
+                    'icon' => $rowIcon,
                     'hPath' => $rowHpath,
                     'parentId' => $rowParent,
                     'sortIndex' => $rowSortIndex,
@@ -5465,9 +5502,11 @@ function handle_api(string $path): void {
             }
         } else {
             $docSizeTotal = strlen($markdown);
+            $docIcon = trim((string)($meta['icon'] ?? ''));
             $docRows[] = [
                 'docId' => $docId,
                 'title' => $title ?: $docId,
+                'icon' => $docIcon,
                 'hPath' => $hPath,
                 'parentId' => null,
                 'sortIndex' => 0,
@@ -5589,13 +5628,14 @@ function handle_api(string $path): void {
             seed_share_visitors_from_logs($shareId);
         }
         $pdo->prepare('DELETE FROM share_docs WHERE share_id = :share_id')->execute([':share_id' => $shareId]);
-        $insertDoc = $pdo->prepare('INSERT INTO share_docs (share_id, doc_id, title, hpath, parent_id, sort_index, markdown, sort_order, size_bytes, created_at, updated_at)
-            VALUES (:share_id, :doc_id, :title, :hpath, :parent_id, :sort_index, :markdown, :sort_order, :size_bytes, :created_at, :updated_at)');
+        $insertDoc = $pdo->prepare('INSERT INTO share_docs (share_id, doc_id, title, icon, hpath, parent_id, sort_index, markdown, sort_order, size_bytes, created_at, updated_at)
+            VALUES (:share_id, :doc_id, :title, :icon, :hpath, :parent_id, :sort_index, :markdown, :sort_order, :size_bytes, :created_at, :updated_at)');
         foreach ($docRows as $row) {
             $insertDoc->execute([
                 ':share_id' => $shareId,
                 ':doc_id' => $row['docId'],
                 ':title' => $row['title'],
+                ':icon' => $row['icon'] !== '' ? $row['icon'] : null,
                 ':hpath' => $row['hPath'],
                 ':parent_id' => $row['parentId'] !== '' ? $row['parentId'] : null,
                 ':sort_index' => $row['sortIndex'],
@@ -5677,6 +5717,7 @@ function handle_api(string $path): void {
         foreach ($docs as $index => $doc) {
             $docId = trim((string)($doc['docId'] ?? ''));
             $docTitle = trim((string)($doc['title'] ?? ''));
+            $docIcon = trim((string)($doc['icon'] ?? ''));
             $docHpath = (string)($doc['hPath'] ?? '');
             $docMarkdown = (string)($doc['markdown'] ?? '');
             $docSort = max(0, (int)($doc['sortOrder'] ?? $index));
@@ -5690,6 +5731,7 @@ function handle_api(string $path): void {
             $docRows[] = [
                 'docId' => $docId,
                 'title' => $docTitle ?: $docId,
+                'icon' => $docIcon,
                 'hPath' => $docHpath,
                 'parentId' => $docParent,
                 'sortIndex' => $docSortIndex,
@@ -5814,13 +5856,14 @@ function handle_api(string $path): void {
             seed_share_visitors_from_logs($shareId);
         }
         $pdo->prepare('DELETE FROM share_docs WHERE share_id = :share_id')->execute([':share_id' => $shareId]);
-        $stmt = $pdo->prepare('INSERT INTO share_docs (share_id, doc_id, title, hpath, parent_id, sort_index, markdown, sort_order, size_bytes, created_at, updated_at)
-            VALUES (:share_id, :doc_id, :title, :hpath, :parent_id, :sort_index, :markdown, :sort_order, :size_bytes, :created_at, :updated_at)');
+        $stmt = $pdo->prepare('INSERT INTO share_docs (share_id, doc_id, title, icon, hpath, parent_id, sort_index, markdown, sort_order, size_bytes, created_at, updated_at)
+            VALUES (:share_id, :doc_id, :title, :icon, :hpath, :parent_id, :sort_index, :markdown, :sort_order, :size_bytes, :created_at, :updated_at)');
         foreach ($docRows as $row) {
             $stmt->execute([
                 ':share_id' => $shareId,
                 ':doc_id' => $row['docId'],
                 ':title' => $row['title'],
+                ':icon' => $row['icon'] !== '' ? $row['icon'] : null,
                 ':hpath' => $row['hPath'],
                 ':parent_id' => $row['parentId'] !== '' ? $row['parentId'] : null,
                 ':sort_index' => $row['sortIndex'],
@@ -6138,7 +6181,122 @@ function sort_doc_tree(array &$nodes): void {
     });
 }
 
-function render_doc_tree(array $nodes, string $slug, ?string $activeId = null, int $level = 0, string $path = ''): string {
+function decode_hex_emoji_string(string $value): string {
+    $raw = trim($value);
+    if ($raw === '') {
+        return $raw;
+    }
+    $raw = preg_replace('/^u\+/i', '', $raw);
+    $raw = str_replace(' ', '', $raw);
+    if (!preg_match('/^(?:0x)?[0-9a-f]{4,6}(?:-(?:0x)?[0-9a-f]{4,6})*$/i', $raw)) {
+        return $value;
+    }
+    $parts = explode('-', strtolower($raw));
+    $out = '';
+    foreach ($parts as $part) {
+        $part = preg_replace('/^0x/', '', $part);
+        if ($part === '') {
+            continue;
+        }
+        $out .= html_entity_decode('&#x' . $part . ';', ENT_NOQUOTES, 'UTF-8');
+    }
+    return $out !== '' ? $out : $value;
+}
+
+function normalize_doc_icon_value($value): string {
+    if ($value === null) {
+        return '';
+    }
+    if (is_string($value)) {
+        $trimmed = trim($value);
+        if ($trimmed === '') {
+            return '';
+        }
+        if ((str_starts_with($trimmed, '{') && str_ends_with($trimmed, '}')) ||
+            (str_starts_with($trimmed, '[') && str_ends_with($trimmed, ']'))
+        ) {
+            $decoded = json_decode($trimmed, true);
+            if (json_last_error() === JSON_ERROR_NONE && $decoded !== null) {
+                return normalize_doc_icon_value($decoded);
+            }
+        }
+        return decode_hex_emoji_string($trimmed);
+    }
+    if (is_numeric($value)) {
+        return decode_hex_emoji_string((string)$value);
+    }
+    if (is_object($value)) {
+        $value = (array)$value;
+    }
+    if (is_array($value)) {
+        $keys = ['icon', 'value', 'emoji', 'iconEmoji', 'iconValue', 'path', 'file', 'asset', 'assetPath', 'src', 'url'];
+        foreach ($keys as $key) {
+            if (array_key_exists($key, $value)) {
+                $candidate = normalize_doc_icon_value($value[$key]);
+                if ($candidate !== '') {
+                    return $candidate;
+                }
+            }
+        }
+        foreach ($value as $item) {
+            $candidate = normalize_doc_icon_value($item);
+            if ($candidate !== '') {
+                return $candidate;
+            }
+        }
+    }
+    return '';
+}
+
+function is_doc_icon_image_value(string $icon): bool {
+    if ($icon === '') {
+        return false;
+    }
+    if (preg_match('/^data:image\//i', $icon)) {
+        return true;
+    }
+    if (preg_match('/^https?:\/\//i', $icon)) {
+        return true;
+    }
+    if (strpos($icon, '/') !== false || preg_match('/\.(svg|png|jpe?g|gif|webp|bmp)$/i', $icon)) {
+        return true;
+    }
+    return false;
+}
+
+function build_doc_icon_src(string $icon, string $assetBasePath): string {
+    if ($icon === '') {
+        return '';
+    }
+    if (preg_match('/^data:image\//i', $icon) || preg_match('/^https?:\/\//i', $icon)) {
+        return $icon;
+    }
+    $path = sanitize_asset_path($icon);
+    if ($path === '') {
+        return '';
+    }
+    $prefix = $assetBasePath;
+    if ($prefix !== '' && substr($prefix, -1) !== '/') {
+        $prefix .= '/';
+    }
+    return $prefix . $path;
+}
+
+function render_doc_tree_icon(?array $doc, string $assetBasePath): string {
+    $icon = $doc ? normalize_doc_icon_value($doc['icon'] ?? '') : '';
+    if ($icon !== '' && is_doc_icon_image_value($icon)) {
+        $src = build_doc_icon_src($icon, $assetBasePath);
+        if ($src !== '') {
+            return '<img class="kb-tree-icon kb-tree-icon--image" src="' . htmlspecialchars($src) . '" alt="">';
+        }
+    }
+    if ($icon !== '' && !is_doc_icon_image_value($icon)) {
+        return '<span class="kb-tree-icon kb-tree-icon--emoji">' . htmlspecialchars($icon) . '</span>';
+    }
+    return '';
+}
+
+function render_doc_tree(array $nodes, string $slug, ?string $activeId = null, int $level = 0, string $path = '', string $assetBasePath = ''): string {
     if (empty($nodes)) {
         return '';
     }
@@ -6158,7 +6316,10 @@ function render_doc_tree(array $nodes, string $slug, ?string $activeId = null, i
         $html .= '<li class="' . $nodeClass . '" data-tree-key="' . htmlspecialchars($nodeKey) . '">';
         $html .= '<div class="kb-tree-row">';
         if ($hasChildren) {
-            $html .= '<button class="kb-tree-toggle" type="button" aria-expanded="' . ($shouldOpen ? 'true' : 'false') . '"></button>';
+            $html .= '<button class="kb-tree-toggle" type="button" aria-expanded="' . ($shouldOpen ? 'true' : 'false') . '">';
+            $html .= '<svg class="kb-tree-toggle-icon kb-tree-toggle-icon--collapsed" viewBox="0 0 24 24" aria-hidden="true"><use href="#sps-tree-arrow-collapsed"></use></svg>';
+            $html .= '<svg class="kb-tree-toggle-icon kb-tree-toggle-icon--open" viewBox="0 0 24 24" aria-hidden="true"><use href="#sps-tree-arrow-expanded"></use></svg>';
+            $html .= '</button>';
         } else {
             $html .= '<span class="kb-tree-spacer"></span>';
         }
@@ -6167,13 +6328,17 @@ function render_doc_tree(array $nodes, string $slug, ?string $activeId = null, i
             $docTitle = htmlspecialchars($doc['title'] ?? $docId);
             $docPath = base_path() . '/s/' . $slug . '/' . rawurlencode($docId);
             $activeClass = $isActive ? ' is-active' : '';
-            $html .= '<a class="kb-tree-item' . $activeClass . '" href="' . $docPath . '">' . $docTitle . '</a>';
+            $html .= '<a class="kb-tree-item' . $activeClass . '" href="' . $docPath . '">';
+            $html .= render_doc_tree_icon($doc, $assetBasePath);
+            $html .= '<span class="kb-tree-label">' . $docTitle . '</span></a>';
         } else {
-            $html .= '<div class="kb-tree-folder">' . htmlspecialchars((string)$node['title']) . '</div>';
+            $html .= '<div class="kb-tree-folder">';
+            $html .= render_doc_tree_icon(null, $assetBasePath);
+            $html .= '<span class="kb-tree-label">' . htmlspecialchars((string)$node['title']) . '</span></div>';
         }
         $html .= '</div>';
         if ($hasChildren) {
-            $html .= render_doc_tree($node['children'], $slug, $activeId, $level + 1, $pathKey);
+            $html .= render_doc_tree($node['children'], $slug, $activeId, $level + 1, $pathKey, $assetBasePath);
         }
         $html .= '</li>';
     }
@@ -6296,11 +6461,15 @@ function route_share(string $slug, ?string $docId = null): void {
             record_share_access($share, (string)($doc['doc_id'] ?? ''), $docTitleRaw);
             $commentHtml = render_share_comments($share, $viewer, (string)$activeDocId);
             $reportModalHtml = render_share_report_form($share, $viewer, (string)$activeDocId);
-            $treeHtml = render_doc_tree(build_doc_tree($docs, $activeDocId), $slug, $activeDocId);
+            $treeHtml = render_doc_tree(build_doc_tree($docs, $activeDocId), $slug, $activeDocId, 0, '', $assetBasePath);
             $sidebar = '<aside class="kb-sidebar" data-share-sidebar data-share-slug="' . htmlspecialchars($slug) . '">';
             $sidebar .= '<div class="kb-side-tabs" data-share-tabs data-share-default="tree">';
             $sidebar .= '<button class="kb-side-tab is-active" type="button" data-share-tab="tree">文档树</button>';
             $sidebar .= '<button class="kb-side-tab" type="button" data-share-tab="toc">目录</button>';
+            $sidebar .= '<div class="kb-side-actions" data-share-tree-actions>';
+            $sidebar .= '<button class="kb-side-action" type="button" data-tree-collapse title="折叠所有" aria-label="折叠所有"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#sps-tree-collapse-all"></use></svg></button>';
+            $sidebar .= '<button class="kb-side-action" type="button" data-tree-expand title="展开所有" aria-label="展开所有"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#sps-tree-expand-all"></use></svg></button>';
+            $sidebar .= '</div>';
             $sidebar .= '</div>';
             $sidebar .= '<div class="kb-side-panel" data-share-panel="tree">';
             $sidebar .= '<div class="kb-side-body">' . $treeHtml . '</div>';
@@ -6378,11 +6547,15 @@ function route_share(string $slug, ?string $docId = null): void {
     }
 
     if ($share['type'] === 'notebook') {
-        $treeHtml = render_doc_tree(build_doc_tree($docs, $docId), $slug, $docId);
+        $treeHtml = render_doc_tree(build_doc_tree($docs, $docId), $slug, $docId, 0, '', $assetBasePath);
         $sidebar = '<aside class="kb-sidebar" data-share-sidebar data-share-slug="' . htmlspecialchars($slug) . '">';
         $sidebar .= '<div class="kb-side-tabs" data-share-tabs data-share-default="tree">';
         $sidebar .= '<button class="kb-side-tab is-active" type="button" data-share-tab="tree">文档树</button>';
         $sidebar .= '<button class="kb-side-tab" type="button" data-share-tab="toc">目录</button>';
+        $sidebar .= '<div class="kb-side-actions" data-share-tree-actions>';
+        $sidebar .= '<button class="kb-side-action" type="button" data-tree-collapse title="折叠所有" aria-label="折叠所有"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#sps-tree-collapse-all"></use></svg></button>';
+        $sidebar .= '<button class="kb-side-action" type="button" data-tree-expand title="展开所有" aria-label="展开所有"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#sps-tree-expand-all"></use></svg></button>';
+        $sidebar .= '</div>';
         $sidebar .= '</div>';
         $sidebar .= '<div class="kb-side-panel" data-share-panel="tree">';
         $sidebar .= '<div class="kb-side-body">' . $treeHtml . '</div>';

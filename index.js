@@ -56,6 +56,8 @@ const SHARE_TYPES = {
   DOC: "doc",
   NOTEBOOK: "notebook",
 };
+const DEFAULT_DOC_ICON_LEAF = "📄";
+const DEFAULT_DOC_ICON_PARENT = "📑";
 
 const TREE_SHARE_CLASS = "sps-tree-share";
 const TREE_SHARED_CLASS = "sps-tree-item--shared";
@@ -872,6 +874,171 @@ function extractDocTreeNodes(data) {
   return [];
 }
 
+function normalizeDocIconValue(raw) {
+  if (raw == null) return "";
+  if (typeof raw === "string") {
+    let trimmed = raw.trim();
+    if (!trimmed) return "";
+    if (
+      (trimmed.startsWith("{") && trimmed.endsWith("}")) ||
+      (trimmed.startsWith("[") && trimmed.endsWith("]"))
+    ) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        return normalizeDocIconValue(parsed);
+      } catch {
+        // ignore
+      }
+    }
+    const normalizedHex = trimmed.replace(/^u\+/i, "").replace(/\s+/g, "");
+    if (/^(?:0x)?[0-9a-f]{4,6}(?:-(?:0x)?[0-9a-f]{4,6})*$/i.test(normalizedHex)) {
+      const parts = normalizedHex.split("-").map((part) => part.replace(/^0x/i, ""));
+      try {
+        const codepoints = parts.map((part) => parseInt(part, 16)).filter((n) => Number.isFinite(n));
+        if (codepoints.length) {
+          return String.fromCodePoint(...codepoints);
+        }
+      } catch {
+        // ignore
+      }
+    }
+    return trimmed;
+  }
+  if (typeof raw === "number") return String(raw);
+  if (Array.isArray(raw)) {
+    for (const item of raw) {
+      const value = normalizeDocIconValue(item);
+      if (value) return value;
+    }
+    return "";
+  }
+  if (typeof raw === "object") {
+    const candidates = [
+      raw.icon,
+      raw.value,
+      raw.emoji,
+      raw.iconEmoji,
+      raw.iconValue,
+      raw.path,
+      raw.file,
+      raw.asset,
+      raw.assetPath,
+      raw.src,
+      raw.url,
+    ];
+    for (const candidate of candidates) {
+      const value = normalizeDocIconValue(candidate);
+      if (value) return value;
+    }
+  }
+  return "";
+}
+
+function extractDocTreeNodeIcon(node) {
+  if (!node) return "";
+  const candidates = [
+    node.icon,
+    node.iconEmoji,
+    node.emoji,
+    node.emojiIcon,
+    node.iconValue,
+    node.iconPath,
+    node.iconSrc,
+    node.data?.icon,
+    node.data?.iconEmoji,
+    node.data?.emoji,
+    node.data?.iconValue,
+    node.attrs?.icon,
+    node.attrs?.iconEmoji,
+    node.attrs?.emoji,
+  ];
+  for (const candidate of candidates) {
+    const value = normalizeDocIconValue(candidate);
+    if (value) return value;
+  }
+  return "";
+}
+
+function extractDocIconFromAttrs(attrs) {
+  if (!attrs || typeof attrs !== "object") return "";
+  const candidates = [
+    attrs.icon,
+    attrs.emoji,
+    attrs.iconEmoji,
+    attrs.iconValue,
+    attrs.iconPath,
+  ];
+  for (const candidate of candidates) {
+    const value = normalizeDocIconValue(candidate);
+    if (value) return value;
+  }
+  return "";
+}
+
+function getDocIconKind(iconValue) {
+  const icon = normalizeDocIconValue(iconValue);
+  if (!icon) return "empty";
+  if (/^data:image\//i.test(icon)) return "data";
+  if (/^https?:\/\//i.test(icon)) return "url";
+  if (/[\\/]/.test(icon) || /\.(svg|png|jpe?g|gif|webp|bmp)$/i.test(icon)) {
+    return "asset";
+  }
+  return "emoji";
+}
+
+function normalizeDocIconAssetPath(iconValue) {
+  const icon = normalizeDocIconValue(iconValue);
+  if (!icon) return "";
+  if (/^data:image\//i.test(icon) || /^https?:\/\//i.test(icon)) {
+    return icon;
+  }
+  let cleaned = icon.replace(/^file:\/+/i, "");
+  cleaned = cleaned.replace(/^[\\/]+/, "");
+  const decoded = tryDecodeAssetPath(cleaned) || "";
+  const normalized = normalizeAssetPath(decoded || cleaned);
+  return normalized || "";
+}
+
+function normalizeApiIconUrl(iconValue) {
+  if (typeof iconValue !== "string") return "";
+  const raw = iconValue.trim();
+  if (!raw) return "";
+  if (/^https?:\/\//i.test(raw)) return "";
+  if (raw.startsWith("//")) return `${location.protocol}${raw}`;
+  if (raw.startsWith("/api/")) return `${location.origin}${raw}`;
+  if (raw.startsWith("api/")) return `${location.origin}/${raw}`;
+  return "";
+}
+
+function guessImageExtension(contentType = "", url = "") {
+  const type = String(contentType || "").toLowerCase();
+  if (type.includes("svg")) return "svg";
+  if (type.includes("png")) return "png";
+  if (type.includes("jpeg") || type.includes("jpg")) return "jpg";
+  if (type.includes("gif")) return "gif";
+  if (type.includes("webp")) return "webp";
+  if (type.includes("bmp")) return "bmp";
+  const match = String(url || "").match(/\.(svg|png|jpe?g|gif|webp|bmp)(?:\?|#|$)/i);
+  if (match) return match[1].toLowerCase().replace("jpeg", "jpg");
+  return "png";
+}
+
+function applyDefaultDocIcons(docs) {
+  if (!Array.isArray(docs) || docs.length === 0) return;
+  const hasChildren = new Set();
+  docs.forEach((doc) => {
+    const parentId = String(doc?.parentId || "").trim();
+    if (isValidDocId(parentId)) hasChildren.add(parentId);
+  });
+  docs.forEach((doc) => {
+    const docId = String(doc?.docId || "").trim();
+    if (!isValidDocId(docId)) return;
+    const current = normalizeDocIconValue(doc?.icon);
+    if (current) return;
+    doc.icon = hasChildren.has(docId) ? DEFAULT_DOC_ICON_PARENT : DEFAULT_DOC_ICON_LEAF;
+  });
+}
+
 function getDocTreeChildren(node) {
   if (!node) return [];
   const children = node.children || node.child || node.files || node.nodes;
@@ -1093,6 +1260,7 @@ class SiYuanSharePlugin extends Plugin {
     this.remoteUser = null;
     this.remoteVerifiedAt = 0;
     this.notebooks = [];
+    this.docIconCache = new Map();
     this.docTreeContainer = null;
     this.docTreeObserver = null;
     this.docTreeBindTimer = null;
@@ -1386,6 +1554,185 @@ class SiYuanSharePlugin extends Plugin {
       console.error(err);
     }
     return null;
+  }
+
+  async fetchBlockAttrs(blockId) {
+    if (!isValidDocId(blockId)) return null;
+    try {
+      const resp = await fetchSyncPost("/api/attr/getBlockAttrs", {id: blockId});
+      if (resp && resp.code === 0 && resp.data && typeof resp.data === "object") {
+        return resp.data;
+      }
+    } catch (err) {
+      // ignore
+    }
+    return null;
+  }
+
+  async fetchDocIconsBySQL(docIds) {
+    const out = new Map();
+    if (!Array.isArray(docIds) || docIds.length === 0) return out;
+    const ids = Array.from(
+      new Set(docIds.map((id) => String(id || "").trim()).filter((id) => isValidDocId(id))),
+    );
+    if (!ids.length) return out;
+    const quoted = ids.map((id) => `'${id.replace(/'/g, "''")}'`).join(",");
+    const candidates = [
+      `SELECT block_id AS blockId, name, value FROM attributes WHERE block_id IN (${quoted}) AND name IN ('icon','emoji','iconEmoji')`,
+      `SELECT block_id AS blockId, name, value FROM attrs WHERE block_id IN (${quoted}) AND name IN ('icon','emoji','iconEmoji')`,
+      `SELECT block_id AS blockId, name, value FROM block_attributes WHERE block_id IN (${quoted}) AND name IN ('icon','emoji','iconEmoji')`,
+      `SELECT id AS blockId, icon AS value FROM blocks WHERE id IN (${quoted})`,
+    ];
+    for (const stmt of candidates) {
+      let resp = null;
+      try {
+        resp = await fetchSyncPost("/api/query/sql", {stmt});
+      } catch {
+        resp = null;
+      }
+      if (!resp || resp.code !== 0 || !Array.isArray(resp.data)) {
+        continue;
+      }
+      for (const row of resp.data) {
+        const blockId = String(row?.blockId || row?.block_id || row?.id || "").trim();
+        if (!isValidDocId(blockId)) continue;
+        let rawValue = row?.value;
+        if (rawValue == null && typeof row?.icon !== "undefined") rawValue = row.icon;
+        const icon = normalizeDocIconValue(rawValue);
+        if (!icon) continue;
+        if (!out.has(blockId)) out.set(blockId, icon);
+      }
+      break;
+    }
+    return out;
+  }
+
+  async fillDocIcons(docs) {
+    if (!Array.isArray(docs) || docs.length === 0) return;
+    if (!this.docIconCache) this.docIconCache = new Map();
+    const pending = [];
+    docs.forEach((doc) => {
+      const docId = String(doc?.docId || "").trim();
+      if (!isValidDocId(docId)) return;
+      const provided = normalizeDocIconValue(doc?.icon);
+      if (provided) {
+        this.docIconCache.set(docId, provided);
+        doc.icon = provided;
+        return;
+      }
+      if (this.docIconCache.has(docId)) {
+        const cached = this.docIconCache.get(docId) || "";
+        if (cached) {
+          doc.icon = cached;
+          return;
+        }
+      }
+      pending.push(docId);
+    });
+    const missing = Array.from(new Set(pending));
+    if (!missing.length) return;
+    const sqlMap = await this.fetchDocIconsBySQL(missing);
+    sqlMap.forEach((icon, id) => this.docIconCache.set(id, icon));
+    const still = missing.filter((id) => !this.docIconCache.has(id) || !this.docIconCache.get(id));
+    if (still.length) {
+      const tasks = still.map((id) => async () => {
+        const attrs = await this.fetchBlockAttrs(id);
+        const icon = extractDocIconFromAttrs(attrs);
+        if (icon) {
+          this.docIconCache.set(id, icon);
+        } else {
+          this.docIconCache.set(id, "");
+        }
+      });
+      await runTasksWithConcurrency(tasks, 6);
+    }
+    docs.forEach((doc) => {
+      const docId = String(doc?.docId || "").trim();
+      if (!isValidDocId(docId)) return;
+      if (normalizeDocIconValue(doc?.icon)) return;
+      const cached = this.docIconCache.get(docId) || "";
+      if (cached) doc.icon = cached;
+    });
+  }
+
+  async resolveDocIcon(docId) {
+    const id = String(docId || "").trim();
+    if (!isValidDocId(id)) return "";
+    if (!this.docIconCache) this.docIconCache = new Map();
+    if (this.docIconCache.has(id)) {
+      const cached = this.docIconCache.get(id) || "";
+      if (cached) return cached;
+    }
+    const sqlMap = await this.fetchDocIconsBySQL([id]);
+    if (sqlMap.has(id)) {
+      const icon = sqlMap.get(id) || "";
+      this.docIconCache.set(id, icon);
+      return icon;
+    }
+    const attrs = await this.fetchBlockAttrs(id);
+    const icon = extractDocIconFromAttrs(attrs);
+    this.docIconCache.set(id, icon || "");
+    return icon || "";
+  }
+
+  async resolveIconUpload(
+    iconValue,
+    {docId = "", notebookId = "", usedUploadPaths = null, assetMap = null, iconUploadMap = null, controller} = {},
+  ) {
+    const icon = normalizeDocIconValue(iconValue);
+    if (!icon) return "";
+    const apiUrl = normalizeApiIconUrl(icon);
+    if (apiUrl) {
+      if (iconUploadMap && iconUploadMap.has(apiUrl)) {
+        return iconUploadMap.get(apiUrl) || "";
+      }
+      try {
+        const {blob, contentType} = await this.fetchIconUrlBlob(apiUrl, controller);
+        const ext = guessImageExtension(contentType, apiUrl);
+        const baseName = isValidDocId(docId) ? `doc-${docId}` : `icon-${randomSlug(8)}`;
+        const rawPath = `assets/share-icons/${baseName}.${ext}`;
+        const uploadPath = sanitizeAssetUploadPath(rawPath, usedUploadPaths) || normalizeAssetPath(rawPath);
+        if (!uploadPath) return "";
+        if (assetMap && !assetMap.has(uploadPath)) {
+          assetMap.set(uploadPath, {asset: {path: uploadPath, blob}, docId});
+        }
+        if (usedUploadPaths) usedUploadPaths.add(uploadPath);
+        if (iconUploadMap) iconUploadMap.set(apiUrl, uploadPath);
+        return uploadPath;
+      } catch (err) {
+        if (isAbortError(err)) throw err;
+        console.warn("Icon url download failed", {url: apiUrl, error: err});
+        if (iconUploadMap) iconUploadMap.set(apiUrl, "");
+        return "";
+      }
+    }
+    const kind = getDocIconKind(icon);
+    if (kind === "emoji" || kind === "url" || kind === "data") return icon;
+    if (kind !== "asset") return icon;
+    const assetPath = normalizeDocIconAssetPath(icon);
+    if (!assetPath) return "";
+    if (iconUploadMap && iconUploadMap.has(assetPath)) {
+      return iconUploadMap.get(assetPath) || "";
+    }
+    if (usedUploadPaths && usedUploadPaths.has(assetPath)) {
+      if (iconUploadMap) iconUploadMap.set(assetPath, assetPath);
+      return assetPath;
+    }
+    const uploadPath = sanitizeAssetUploadPath(assetPath, usedUploadPaths) || normalizeAssetPath(assetPath);
+    if (!uploadPath) return "";
+    try {
+      const asset = await this.fetchAssetBlob(assetPath, controller, notebookId);
+      if (assetMap && !assetMap.has(uploadPath)) {
+        assetMap.set(uploadPath, {asset: {path: uploadPath, blob: asset.blob}, docId});
+      }
+      if (usedUploadPaths) usedUploadPaths.add(uploadPath);
+      if (iconUploadMap) iconUploadMap.set(assetPath, uploadPath);
+      return uploadPath;
+    } catch (err) {
+      if (isAbortError(err)) throw err;
+      console.warn("Icon asset download failed", {path: assetPath, error: err});
+      return "";
+    }
   }
 
   async resolveDocInfoFromAnyId(anyId) {
@@ -3601,18 +3948,25 @@ class SiYuanSharePlugin extends Plugin {
       const info = await this.resolveDocInfoFromAnyId(docId);
       const title = info?.title || t("siyuanShare.label.untitled");
       const notebookId = await this.resolveNotebookIdFromDoc(docId);
+      let rootIcon = await this.resolveDocIcon(docId);
+      if (!normalizeDocIconValue(rootIcon)) {
+        rootIcon = DEFAULT_DOC_ICON_LEAF;
+      }
       throwIfAborted(controller, t("siyuanShare.message.cancelled"));
       let payload = null;
       let assetEntries = [];
       let assetManifest = [];
       let resourceFailures = 0;
       let subtreeDocs = [];
+      const iconUploadMap = new Map();
       if (includeChildren) {
         progress.update(t("siyuanShare.progress.fetchingNotebookList"));
         subtreeDocs = await this.listDocSubtree(docId);
         if (!Array.isArray(subtreeDocs) || subtreeDocs.length === 0) {
           throw new Error("Doc tree fetch failed: listDocsByPath returned empty.");
         }
+        await this.fillDocIcons(subtreeDocs);
+        applyDefaultDocIcons(subtreeDocs);
       }
       const useChildren = includeChildren && subtreeDocs.length > 1;
       if (!useChildren) {
@@ -3626,6 +3980,22 @@ class SiYuanSharePlugin extends Plugin {
           notebookId,
         );
         resourceFailures += failures.length;
+        const assetMap = new Map();
+        const usedUploadPaths = new Set();
+        for (const asset of assets) {
+          const assetPath = asset?.path || "";
+          if (!assetPath || assetMap.has(assetPath)) continue;
+          assetMap.set(assetPath, {asset, docId});
+          usedUploadPaths.add(assetPath);
+        }
+        const finalIcon = await this.resolveIconUpload(rootIcon, {
+          docId,
+          notebookId,
+          usedUploadPaths,
+          assetMap,
+          iconUploadMap,
+          controller,
+        });
         payload = {
           docId,
           title,
@@ -3633,21 +4003,17 @@ class SiYuanSharePlugin extends Plugin {
           markdown,
           sortOrder: 0,
         };
-        const seenAssets = new Set();
-        for (const asset of assets) {
-          const assetPath = asset?.path || "";
-          if (!assetPath || seenAssets.has(assetPath)) continue;
-          seenAssets.add(assetPath);
-          assetEntries.push({asset, docId});
-          assetManifest.push({
-            path: assetPath,
-            size: Number(asset?.blob?.size) || 0,
-            docId,
-          });
-        }
+        if (finalIcon) payload.icon = finalIcon;
+        assetEntries = Array.from(assetMap.values());
+        assetManifest = assetEntries.map(({asset, docId: entryDocId}) => ({
+          path: asset.path,
+          size: Number(asset?.blob?.size) || 0,
+          docId: entryDocId,
+        }));
       } else {
         const docPayloads = [];
         const assetMap = new Map();
+        const usedUploadPaths = new Set();
         for (const [index, doc] of subtreeDocs.entries()) {
           throwIfAborted(controller, t("siyuanShare.message.cancelled"));
           progress.update(
@@ -3669,6 +4035,14 @@ class SiYuanSharePlugin extends Plugin {
           resourceFailures += failures.length;
           const docTitle =
             doc.title || (doc.docId === docId ? title : t("siyuanShare.label.untitled"));
+          const iconValue = await this.resolveIconUpload(doc?.icon, {
+            docId: doc.docId,
+            notebookId,
+            usedUploadPaths,
+            assetMap,
+            iconUploadMap,
+            controller,
+          });
           docPayloads.push({
             docId: doc.docId,
             title: docTitle,
@@ -3677,11 +4051,12 @@ class SiYuanSharePlugin extends Plugin {
             sortIndex: Number.isFinite(doc.sortIndex) ? doc.sortIndex : index,
             sortOrder: index,
             markdown,
+            ...(iconValue ? {icon: iconValue} : {}),
           });
           for (const asset of assets) {
-            if (!assetMap.has(asset.path)) {
-              assetMap.set(asset.path, {asset, docId: doc.docId});
-            }
+            if (!asset?.path || assetMap.has(asset.path)) continue;
+            assetMap.set(asset.path, {asset, docId: doc.docId});
+            usedUploadPaths.add(asset.path);
           }
         }
         payload = {
@@ -3819,8 +4194,12 @@ class SiYuanSharePlugin extends Plugin {
       const title = notebook?.name || tree?.title || notebookId;
       progress.update(t("siyuanShare.progress.preparingNotebook"));
       if (!docs.length) throw new Error(t("siyuanShare.error.noDocsToShare"));
+      await this.fillDocIcons(docs);
+      applyDefaultDocIcons(docs);
       const docPayloads = [];
       const assetMap = new Map();
+      const usedUploadPaths = new Set();
+      const iconUploadMap = new Map();
       let failureCount = 0;
       for (const [index, doc] of docs.entries()) {
         throwIfAborted(controller, t("siyuanShare.message.cancelled"));
@@ -3838,6 +4217,14 @@ class SiYuanSharePlugin extends Plugin {
           notebookId,
         );
         failureCount += failures.length;
+        const iconValue = await this.resolveIconUpload(doc?.icon, {
+          docId: doc.docId,
+          notebookId,
+          usedUploadPaths,
+          assetMap,
+          iconUploadMap,
+          controller,
+        });
         docPayloads.push({
           docId: doc.docId,
           title: doc.title || t("siyuanShare.label.untitled"),
@@ -3846,11 +4233,12 @@ class SiYuanSharePlugin extends Plugin {
           parentId: doc.parentId || "",
           sortIndex: Number.isFinite(doc.sortIndex) ? doc.sortIndex : index,
           sortOrder: Number.isFinite(doc.sortOrder) ? doc.sortOrder : index,
+          ...(iconValue ? {icon: iconValue} : {}),
         });
         for (const asset of assets) {
-          if (!assetMap.has(asset.path)) {
-            assetMap.set(asset.path, {asset, docId: doc.docId});
-          }
+          if (!asset?.path || assetMap.has(asset.path)) continue;
+          assetMap.set(asset.path, {asset, docId: doc.docId});
+          usedUploadPaths.add(asset.path);
         }
       }
       if (failureCount > 0) {
@@ -3987,9 +4375,11 @@ class SiYuanSharePlugin extends Plugin {
       if (seen.has(docId)) continue;
       seen.add(docId);
       const rawTitle = node?.name || node?.title || node?.content || node?.label || "";
+      const rawIcon = extractDocTreeNodeIcon(node);
       out.push({
         docId: String(docId || "").trim(),
         title: normalizeDocTitle(rawTitle),
+        icon: normalizeDocIconValue(rawIcon),
         parentId: String(parentId || "").trim(),
         sortIndex: index,
         sortOrder: out.length,
@@ -4025,9 +4415,11 @@ class SiYuanSharePlugin extends Plugin {
         if (!isValidDocId(docId)) continue;
         seen.add(docId);
         const rawTitle = node?.name || node?.title || node?.content || node?.label || "";
+        const rawIcon = extractDocTreeNodeIcon(node);
         out.push({
           docId: String(docId || "").trim(),
           title: normalizeDocTitle(rawTitle),
+          icon: normalizeDocIconValue(rawIcon),
           parentId: "",
           sortIndex: index,
           sortOrder: out.length,
@@ -4037,6 +4429,7 @@ class SiYuanSharePlugin extends Plugin {
         if (!okChild) return null;
       }
     }
+    await this.fillDocIcons(out);
     return {title: "", docs: out};
   }
 
@@ -4052,9 +4445,11 @@ class SiYuanSharePlugin extends Plugin {
     const rootTitle = normalizeDocTitle(
       typeof row?.content === "string" ? row.content : "",
     );
+    const rootIcon = await this.resolveDocIcon(docId);
     out.push({
       docId: String(docId || "").trim(),
       title: rootTitle,
+      icon: normalizeDocIconValue(rootIcon),
       parentId: "",
       sortIndex: 0,
       sortOrder: 0,
@@ -4062,6 +4457,7 @@ class SiYuanSharePlugin extends Plugin {
     seen.add(docId);
     const ok = await this.collectDocsByPath(notebookId, rootPath, docId, out, seen);
     if (!ok) return null;
+    await this.fillDocIcons(out);
     return out;
   }
 
@@ -4779,6 +5175,23 @@ class SiYuanSharePlugin extends Plugin {
       return {path: normalized, blob};
     }
     throw lastErr || new Error(t("siyuanShare.error.resourceDownloadFailed", {status: 500}));
+  }
+
+  async fetchIconUrlBlob(url, controller) {
+    const resp = await fetch(url, {
+      method: "GET",
+      headers: {
+        ...getAuthHeaders(),
+      },
+      credentials: "same-origin",
+      signal: controller?.signal,
+    });
+    if (!resp.ok) {
+      throw new Error(`Icon download failed (${resp.status})`);
+    }
+    const contentType = resp.headers.get("content-type") || "";
+    const blob = await resp.blob();
+    return {blob, contentType};
   }
 
   async prepareMarkdownAssets(markdown, controller, notebookId = "") {

@@ -168,6 +168,16 @@
       const btn = node.querySelector(".kb-tree-toggle");
       if (btn) btn.setAttribute("aria-expanded", String(nextOpen));
     };
+    const treeScope = document.querySelector("[data-share-panel='tree']") || document;
+    const toggleAll = (nextOpen) => {
+      const nodes = treeScope.querySelectorAll(".kb-tree-node[data-tree-key]");
+      if (!nodes.length) return;
+      nodes.forEach((node) => {
+        if (!node.querySelector(".kb-tree-toggle")) return;
+        toggleNode(node, nextOpen);
+      });
+      syncState();
+    };
     const applyState = () => {
       const openKeys = readState();
       if (!openKeys.size) return;
@@ -197,6 +207,20 @@
         syncState();
       });
     });
+    const collapseBtn = document.querySelector("[data-tree-collapse]");
+    if (collapseBtn) {
+      collapseBtn.addEventListener("click", (event) => {
+        event.preventDefault();
+        toggleAll(false);
+      });
+    }
+    const expandBtn = document.querySelector("[data-tree-expand]");
+    if (expandBtn) {
+      expandBtn.addEventListener("click", (event) => {
+        event.preventDefault();
+        toggleAll(true);
+      });
+    }
     applyState();
   };
 
@@ -541,6 +565,9 @@
     const container = tabs.closest("[data-share-sidebar]") || document;
     const panels = Array.from(container.querySelectorAll("[data-share-panel]"));
     if (!panels.length) return;
+    const treeActions =
+      tabs.querySelector("[data-share-tree-actions]") ||
+      container.querySelector("[data-share-tree-actions]");
     const defaultTab =
       tabs.getAttribute("data-share-default") ||
       buttons[0]?.dataset.shareTab ||
@@ -554,6 +581,9 @@
       panels.forEach((panel) => {
         panel.hidden = (panel.dataset.sharePanel || "") !== tab;
       });
+      if (treeActions) {
+        treeActions.hidden = tab !== "tree";
+      }
     };
     buttons.forEach((btn) => {
       btn.addEventListener("click", () => {
