@@ -2,7 +2,7 @@
 
 ## 0.3.7 进行中 预计2月15日之前发布
 
-- [ ] 修复过长的表格分享后显示布局和列数都有异常 [Issues 22](https://github.com/b8l8u8e8/siyuan-plugin-share/issues/22)
+- [ ] 修复长表格分享后布局错乱及列数显示异常的问题 [Issues 22](https://github.com/b8l8u8e8/siyuan-plugin-share/issues/22)
 - [ ] 修复笔记本分享页在未加载文档时文档树位置偏上的布局偏移问题
 - [ ] 待反馈
 
