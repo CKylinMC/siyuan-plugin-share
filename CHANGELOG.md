@@ -1,12 +1,18 @@
 # 更新日志
 
+## 0.3.7 进行中 预计2月15日之前发布
+
+- [ ] 修复过长的表格分享后显示布局和列数都有异常 [Issues 22](https://github.com/b8l8u8e8/siyuan-plugin-share/issues/22)
+- [ ] 修复笔记本分享页在未加载文档时文档树位置偏上的布局偏移问题
+- [ ] 待反馈
+
 ## 0.3.6 2026/2/3
 
-- [x] 提示块适配自定义标题，提示块适配自定义表情，同时提示块样式更符合思源笔记默认风格
+- [x] 提示块适配自定义标题，提示块适配自定义表情，同时提示块样式更符合思源笔记默认风格 [Issues 18](https://github.com/b8l8u8e8/siyuan-plugin-share/issues/18)
 
 - [x] 修复部分分享页面自定义表情显示不出来的 Bug 
-- [x] 修复移动端滑动时，在部分显示区域（如表格区域等）无法滑动的问题 
-- [x] 修复电脑端、手机端、分享页在深色模式下的适配问题
+- [x] 修复移动端滑动时，在部分显示区域（如表格区域等）无法滑动的问题  [Issues 20](https://github.com/b8l8u8e8/siyuan-plugin-share/issues/20)
+- [x] 修复电脑端、手机端、分享页在深色模式下的适配问题 [Issues 21](https://github.com/b8l8u8e8/siyuan-plugin-share/issues/21)
 - [x] 优化目录显示细节：解决标题级别跳跃时的缩进问题。例如当 h1 下直接包裹 h6，而另一个 h1 下包裹 h2 时，第一个 h1 下的 h6 不应按原 h6 层级深层缩进，而应自动对齐至 h2 的位置显示(因缺少 h2-h5 级标题)
 - [x] 移动端 IFrame 应禁用原生滚动，改为根据屏幕宽度自动缩放并居中适配。
 - [x] 修复移动端分享页面视频纵横比失真问题，实现自适应比例渲染。
@@ -23,37 +29,37 @@
 
 ## 0.3.4 2026/1/27
 
-- [x] 新增`管理员后台站点设置-网站地址`设置及说明弹窗，可固定分享链接前缀来解决部分问题，例如容器是http，反向代理是https，导致分享链接全部是http的问题、使用ip+端口服务端，分享链接里面没有端口的问题，都可以固定分享链接前缀彻底解决该问题
+- [x] 新增`管理员后台站点设置-网站地址`设置及说明弹窗，可固定分享链接前缀来解决部分问题，例如容器是http，反向代理是https，导致分享链接全部是http的问题、使用ip+端口服务端，分享链接里面没有端口的问题，都可以固定分享链接前缀彻底解决该问题 [Issues 11](https://github.com/b8l8u8e8/siyuan-plugin-share/issues/11)
 - [x] 数据统计功能的优化和增加
 - [x] 优化其他细节
-- [x] 分享页文档树和文档增加支持思源笔记添加的自定义表情
+- [x] 分享页文档树和文档增加支持思源笔记添加的自定义表情 [Issues 16](https://github.com/b8l8u8e8/siyuan-plugin-share/issues/16)
 - [x] 修复其他bug
 
 ## 0.3.3 2026/1/26
 
-- [x] 笔记本或文档及子文档分享后，顺序严格与思源笔记文档树中顺序一致，包括手动调整顺序后，更新内容对应分享顺序也应该保持一致
-- [x] 修复分享时资源获取失败的bug，例如分享思源官方的笔记本`思源笔记用户指南`
+- [x] 笔记本或文档及子文档分享后，顺序严格与思源笔记文档树中顺序一致，包括手动调整顺序后，更新内容对应分享顺序也应该保持一致 [Issues 14](https://github.com/b8l8u8e8/siyuan-plugin-share/issues/14)
+- [x] 修复分享时资源获取失败的bug，例如分享思源官方的笔记本`思源笔记用户指南 ` [Issues 5](https://github.com/b8l8u8e8/siyuan-plugin-share/issues/5)
 - [x] 分享页面文档树美化和功能增加(一键折叠、展开，文档树样式优化，文档树显示图标)
 - [x] 插件端小细节优化
 - [x] 修复其他bug
 
 ## 0.3.2 2026/1/24
 
-- [x] 优化服务端分享页图片预览功能细节
+- [x] 优化服务端分享页图片预览功能细节 [Issues 12](https://github.com/b8l8u8e8/siyuan-plugin-share/issues/12)
 - [x] 优化分享页目录细节
 - [x] 其他小细节优化
 - [x] 插件端分享上传优化
 
 ## 0.3.1 2026/1/22
 
-- [x] 服务端修复分享页图片显示问题
-- [x] 用户访问概览访问记录显示具体链接，不再显示根文档链接
+- [x] 服务端修复分享页图片显示问题 [Issues 9](https://github.com/b8l8u8e8/siyuan-plugin-share/issues/9)
+- [x] 用户访问概览访问记录显示具体链接，不再显示根文档链接 [Issues 6](https://github.com/b8l8u8e8/siyuan-plugin-share/issues/6)
 
 ## 0.3.0 2026/1/22
 
 - [x] 分享页增加适配 `提示块、脑图、图表、五线谱、Graphviz、Flowchart、PlantUML` 和 `代码块、IFrame` 细节优化
-- [x] 分享文档默认只分享该单篇文档，可以勾选同时分享子文档
-- [x] 修复安全问题，若您使用的是Docker部署，只需更新到本版本或更高版本，无需其他操作；若使用的是面板部署，则需要修改伪静态配置，具体操作请参见该版本的发布页面[Release](https://github.com/b8l8u8e8/siyuan-plugin-share/releases/tag/v0.3.0)。
+- [x] 分享文档默认只分享该单篇文档，可以勾选同时分享子文档 [Issues 6](https://github.com/b8l8u8e8/siyuan-plugin-share/issues/6)
+- [x] 修复安全问题，若您使用的是Docker部署，只需更新到本版本或更高版本，无需其他操作；若使用的是面板部署，则需要修改伪静态配置，具体操作请参见该版本的发布页面[Release](https://github.com/b8l8u8e8/siyuan-plugin-share/releases/tag/v0.3.0)。 [Issues 8](https://github.com/b8l8u8e8/siyuan-plugin-share/issues/8)
 - [x] 优化部分细节
 
 ## 0.2.7 2026/1/20
@@ -70,13 +76,13 @@
 ## 0.2.6 2026/1/19
 
 - [x] 插件文档增加赞助者列表
-- [x] 服务端后台管理员可以手动创建账号
+- [x] 服务端后台管理员可以手动创建账号 [Issues 4](https://github.com/b8l8u8e8/siyuan-plugin-share/issues/4)
 - [x] 服务端新版本提示优化
 - [x] 服务端细节优化
 
 ## 0.2.5 2026/1/15
 
-- [x] 服务端分享页面图片点开可以放大预览
+- [x] 服务端分享页面图片点开可以放大预览 [Issues 2](https://github.com/b8l8u8e8/siyuan-plugin-share/issues/2)
 - [x] 服务端手机版分享页面评论显示问题修复
 - [x] 插件端文档增加贡献列表
 - [x] [CoderXiaopang](https://github.com/CoderXiaopang) 为服务端增加Docker、Nas部署方法
