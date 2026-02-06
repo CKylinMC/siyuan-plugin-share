@@ -11,7 +11,7 @@
 - [x] 修复公式排版中的垂直对齐偏移问题。 [Issues 26](https://github.com/b8l8u8e8/siyuan-plugin-share/issues/26)
 - [x] 修复有时候第一次打开分享页不渲染的bug  [Issues 26](https://github.com/b8l8u8e8/siyuan-plugin-share/issues/26)
 - [ ] 修复其他数学公式显示问题 [Issues 26](https://github.com/b8l8u8e8/siyuan-plugin-share/issues/26)
-- [ ] 修复笔记本分享页在未加载文档时文档树位置偏上的布局偏移问题
+- [x] 修复笔记本分享页在未加载文档时文档树位置偏上的布局偏移问题
 - [x] 对引用分享生成的脚注，除脚注跳转外，支持窗口打开方式：点击脚注预览图标可弹窗查看内容，阅读时无需再在正文与脚注间来回切换。
 - [x] [Chen017](https://github.com/Chen017) 修复了在深色模式下代码高亮的适配问题
 
