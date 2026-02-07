@@ -4845,6 +4845,11 @@ function handle_api(string $path): void {
             }
             $docs[] = [
                 'docId' => (string)($row['doc_id'] ?? ''),
+                'title' => (string)($row['title'] ?? ''),
+                'icon' => (string)($row['icon'] ?? ''),
+                'hPath' => (string)($row['hpath'] ?? ''),
+                'parentId' => (string)($row['parent_id'] ?? ''),
+                'sortIndex' => (float)($row['sort_index'] ?? 0),
                 'sortOrder' => max(0, (int)($row['sort_order'] ?? 0)),
                 'contentHash' => $contentHash,
                 'metaHash' => $metaHash,

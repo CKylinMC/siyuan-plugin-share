@@ -24,6 +24,7 @@ const STORAGE_SETTINGS = "settings";
 const STORAGE_SHARES = "shares";
 const STORAGE_SITE_SHARES = "sharesBySite";
 const STORAGE_SHARE_OPTIONS = "shareOptions";
+const STORAGE_INCREMENTAL_CURSOR = "incrementalCursorBySite";
 const DOCK_TYPE = "siyuan-plugin-share-dock";
 const MB = 1024 * 1024;
 const UPLOAD_CHUNK_MIN_SIZE = 256 * 1024;
@@ -114,6 +115,39 @@ function normalizePositiveInt(value, fallback) {
 function normalizeHashHex(value) {
   const raw = String(value || "").trim().toLowerCase();
   return HASH_HEX_RE.test(raw) ? raw : "";
+}
+
+function escapeSqlString(value) {
+  return String(value || "").replace(/'/g, "''");
+}
+
+function chunkArray(list, size = 200) {
+  if (!Array.isArray(list) || list.length === 0) return [];
+  const out = [];
+  const chunkSize = Math.max(1, Math.floor(Number(size) || 1));
+  for (let i = 0; i < list.length; i += chunkSize) {
+    out.push(list.slice(i, i + chunkSize));
+  }
+  return out;
+}
+
+function normalizeDocUpdatedStamp(value) {
+  const raw = String(value || "")
+    .trim()
+    .replace(/\D/g, "");
+  if (raw.length < 14) return "";
+  return raw.slice(0, 14);
+}
+
+function formatDocUpdatedStampFromMs(tsMs) {
+  const ts = Number(tsMs);
+  if (!Number.isFinite(ts) || ts <= 0) return "";
+  const d = new Date(ts);
+  if (!Number.isFinite(d.getTime())) return "";
+  const pad = (num) => String(num).padStart(2, "0");
+  return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}${pad(d.getHours())}${pad(
+    d.getMinutes(),
+  )}${pad(d.getSeconds())}`;
 }
 
 function encodeUtf8Bytes(input) {
@@ -255,6 +289,13 @@ function getMissingChunksFromError(err) {
     .filter((value) => Number.isFinite(value) && value >= 0)
     .map((value) => Math.floor(value));
   return missing.length ? missing : null;
+}
+
+function isRemoteShareNotFoundError(err) {
+  const status = Number(err?.status || err?.code);
+  if (status === 404) return true;
+  const msg = String(err?.message || "").toLowerCase();
+  return msg.includes("share not found");
 }
 
 async function withRetry(task, {retries = 0, baseDelay = 0, maxDelay = 0, controller = null, onRetry = null} = {}) {
@@ -1580,6 +1621,8 @@ class SiYuanSharePlugin extends Plugin {
     this.shares = [];
     this.siteShares = {};
     this.shareOptions = {};
+    this.incrementalCursorBySite = {};
+    this.refQuerySchema = null;
     this.dockElement = null;
     this.workspaceDir = "";
     this.hasNodeFs = !!(fs && path);
@@ -1707,6 +1750,7 @@ class SiYuanSharePlugin extends Plugin {
     await this.removeData(STORAGE_SETTINGS);
     await this.removeData(STORAGE_SHARES);
     await this.removeData(STORAGE_SITE_SHARES);
+    await this.removeData(STORAGE_INCREMENTAL_CURSOR);
   }
 
   onSwitchProtyle = ({detail}) => {
@@ -2888,6 +2932,230 @@ class SiYuanSharePlugin extends Plugin {
     return BLOCK_REF_RE.test(markdown) || BLOCK_REF_LINK_RE.test(markdown);
   }
 
+  async querySqlRows(stmt) {
+    if (!stmt) return null;
+    try {
+      const resp = await fetchSyncPost("/api/query/sql", {stmt});
+      if (resp && resp.code === 0 && Array.isArray(resp.data)) {
+        return resp.data;
+      }
+    } catch {
+      // ignore
+    }
+    return null;
+  }
+
+  async resolveRefQuerySchema() {
+    if (this.refQuerySchema) return this.refQuerySchema;
+    const candidates = ["refs", "ref"];
+    for (const table of candidates) {
+      const rows = await this.querySqlRows(`PRAGMA table_info(${table})`);
+      if (!Array.isArray(rows) || rows.length === 0) continue;
+      const names = rows.map((row) => String(row?.name || "").trim());
+      const rootCol = ["root_id", "rootId", "doc_id", "docId"].find((name) => names.includes(name));
+      const targetCol = ["def_block_root_id", "defBlockRootId", "def_root_id", "defRootId"].find((name) =>
+        names.includes(name),
+      );
+      if (!rootCol || !targetCol) continue;
+      this.refQuerySchema = {table, rootCol, targetCol};
+      return this.refQuerySchema;
+    }
+    return null;
+  }
+
+  resolveIncrementalSinceStamp(existingShare) {
+    const shareId = String(existingShare?.id || "").trim();
+    const cursor = shareId ? this.getIncrementalCursor(shareId) : "";
+    if (cursor) return cursor;
+    return formatDocUpdatedStampFromMs(existingShare?.updatedAt || 0);
+  }
+
+  async queryDocsUpdatedSince(docIds, sinceStamp) {
+    const normalizedSince = normalizeDocUpdatedStamp(sinceStamp);
+    const scope = Array.from(
+      new Set((Array.isArray(docIds) ? docIds : []).map((id) => String(id || "").trim()).filter((id) => isValidDocId(id))),
+    );
+    if (!scope.length || !normalizedSince) return [];
+    const updated = new Set();
+    let failed = false;
+    for (const part of chunkArray(scope, 200)) {
+      const quoted = part.map((id) => `'${escapeSqlString(id)}'`).join(",");
+      const rows = await this.querySqlRows(
+        `SELECT id FROM blocks WHERE type='d' AND id IN (${quoted}) AND updated >= '${escapeSqlString(
+          normalizedSince,
+        )}'`,
+      );
+      if (!Array.isArray(rows)) {
+        failed = true;
+        continue;
+      }
+      rows.forEach((row) => {
+        const id = String(row?.id || "").trim();
+        if (isValidDocId(id)) updated.add(id);
+      });
+    }
+    if (failed) return null;
+    return Array.from(updated);
+  }
+
+  async queryRefImpactedDocsSince(scopeDocIds, sinceStamp) {
+    const normalizedSince = normalizeDocUpdatedStamp(sinceStamp);
+    const scope = Array.from(
+      new Set(
+        (Array.isArray(scopeDocIds) ? scopeDocIds : [])
+          .map((id) => String(id || "").trim())
+          .filter((id) => isValidDocId(id)),
+      ),
+    );
+    if (!scope.length || !normalizedSince) return [];
+    const schema = await this.resolveRefQuerySchema();
+    if (!schema) return null;
+    const impacted = new Set();
+    const quotedSince = escapeSqlString(normalizedSince);
+    let failed = false;
+    for (const part of chunkArray(scope, 120)) {
+      const quoted = part.map((id) => `'${escapeSqlString(id)}'`).join(",");
+      const stmt = `SELECT DISTINCT ${schema.rootCol} AS docId
+        FROM ${schema.table}
+        WHERE ${schema.rootCol} IN (${quoted})
+          AND ${schema.targetCol} IN (
+            SELECT id FROM blocks WHERE type='d' AND updated >= '${quotedSince}'
+          )`;
+      const rows = await this.querySqlRows(stmt);
+      if (!Array.isArray(rows)) {
+        failed = true;
+        continue;
+      }
+      rows.forEach((row) => {
+        const id = String(row?.docId || "").trim();
+        if (isValidDocId(id)) impacted.add(id);
+      });
+    }
+    if (failed) return null;
+    return Array.from(impacted);
+  }
+
+  async collectIncrementalCandidateDocIds(scopeDocs, existingShare, {controller = null, progress = null} = {}) {
+    const t = this.t.bind(this);
+    const scope = Array.isArray(scopeDocs) ? scopeDocs : [];
+    const scopeIds = Array.from(
+      new Set(scope.map((doc) => String(doc?.docId || "").trim()).filter((id) => isValidDocId(id))),
+    );
+    const scopeSet = new Set(scopeIds);
+    if (!scopeIds.length) {
+      return {
+        sinceStamp: "",
+        directDocIds: [],
+        impactedDocIds: [],
+        candidateDocIds: [],
+      };
+    }
+    const sinceStamp = this.resolveIncrementalSinceStamp(existingShare);
+    if (!sinceStamp) {
+      return {
+        sinceStamp: "",
+        directDocIds: scopeIds,
+        impactedDocIds: [],
+        candidateDocIds: scopeIds,
+      };
+    }
+    throwIfAborted(controller, t("siyuanShare.message.cancelled"));
+    const directDocIds = await this.queryDocsUpdatedSince(scopeIds, sinceStamp);
+    if (!Array.isArray(directDocIds)) {
+      throw new Error("Incremental precheck failed while querying changed docs");
+    }
+    throwIfAborted(controller, t("siyuanShare.message.cancelled"));
+    const impactedDocIds = await this.queryRefImpactedDocsSince(scopeIds, sinceStamp);
+    if (!Array.isArray(impactedDocIds)) {
+      throw new Error("Incremental precheck failed while querying references");
+    }
+    throwIfAborted(controller, t("siyuanShare.message.cancelled"));
+    const candidate = new Set();
+    directDocIds.forEach((id) => {
+      if (scopeSet.has(id)) candidate.add(id);
+    });
+    impactedDocIds.forEach((id) => {
+      if (scopeSet.has(id)) candidate.add(id);
+    });
+    const candidateDocIds = Array.from(candidate);
+    progress?.update?.({
+      text: t("siyuanShare.progress.analyzingIncrement"),
+      detail: t("siyuanShare.progress.analyzingDocs", {
+        index: candidateDocIds.length,
+        total: scopeIds.length,
+      }),
+    });
+    return {
+      sinceStamp,
+      directDocIds,
+      impactedDocIds,
+      candidateDocIds,
+    };
+  }
+
+  collectStructChangedDocIds(scopeDocs, remoteSnapshot) {
+    const localList = Array.isArray(scopeDocs) ? scopeDocs : [];
+    const remoteList = Array.isArray(remoteSnapshot?.docs) ? remoteSnapshot.docs : [];
+    if (!localList.length || !remoteList.length) return [];
+    const remoteMap = new Map();
+    remoteList.forEach((row) => {
+      const docId = String(row?.docId || "").trim();
+      if (!isValidDocId(docId)) return;
+      remoteMap.set(docId, row || {});
+    });
+    const changed = new Set();
+    localList.forEach((doc, index) => {
+      const docId = String(doc?.docId || "").trim();
+      if (!isValidDocId(docId)) return;
+      const remote = remoteMap.get(docId);
+      if (!remote) {
+        changed.add(docId);
+        return;
+      }
+      const localSortOrder = Math.max(0, Math.floor(Number(doc?.sortOrder) || index));
+      const remoteSortOrder = Math.max(0, Math.floor(Number(remote?.sortOrder) || 0));
+      let different = localSortOrder !== remoteSortOrder;
+      if (
+        !different &&
+        Object.prototype.hasOwnProperty.call(remote, "title") &&
+        String(doc?.title || "") !== String(remote?.title || "")
+      ) {
+        different = true;
+      }
+      if (
+        !different &&
+        Object.prototype.hasOwnProperty.call(remote, "icon") &&
+        normalizeDocIconValue(doc?.icon || "") !== normalizeDocIconValue(remote?.icon || "")
+      ) {
+        different = true;
+      }
+      const hasParentField =
+        Object.prototype.hasOwnProperty.call(remote, "parentId") ||
+        Object.prototype.hasOwnProperty.call(remote, "parent_id");
+      if (
+        !different &&
+        hasParentField &&
+        String(doc?.parentId || "") !== String(remote?.parentId || remote?.parent_id || "")
+      ) {
+        different = true;
+      }
+      const hasSortIndexField =
+        Object.prototype.hasOwnProperty.call(remote, "sortIndex") ||
+        Object.prototype.hasOwnProperty.call(remote, "sort_index");
+      if (hasSortIndexField && !different) {
+        const localSortIndex = normalizeSortIndexForHash(doc?.sortIndex ?? 0);
+        const remoteSortIndex = normalizeSortIndexForHash(remote?.sortIndex ?? remote?.sort_index ?? 0);
+        if (localSortIndex !== remoteSortIndex) {
+          different = true;
+        }
+      }
+      if (different) {
+        changed.add(docId);
+      }
+    });
+    return Array.from(changed);
+  }
+
   async hasDocReferencesBySQL(docIds) {
     if (!Array.isArray(docIds) || docIds.length === 0) return false;
     const unique = Array.from(
@@ -3251,12 +3519,14 @@ class SiYuanSharePlugin extends Plugin {
     const legacyShares = (await this.loadData(STORAGE_SHARES)) || [];
     const siteSharesRaw = (await this.loadData(STORAGE_SITE_SHARES)) || {};
     const shareOptionsRaw = (await this.loadData(STORAGE_SHARE_OPTIONS)) || {};
+    const incrementalCursorRaw = (await this.loadData(STORAGE_INCREMENTAL_CURSOR)) || {};
     const siteShares =
       siteSharesRaw && typeof siteSharesRaw === "object" && !Array.isArray(siteSharesRaw) ? siteSharesRaw : {};
     const shareOptions =
       shareOptionsRaw && typeof shareOptionsRaw === "object" && !Array.isArray(shareOptionsRaw)
         ? shareOptionsRaw
         : {};
+    const incrementalCursorBySite = this.normalizeIncrementalCursorBySite(incrementalCursorRaw);
     let sites = this.normalizeSiteList(settings.sites);
     let activeSiteId = String(settings.activeSiteId || "");
     let persistSettings = false;
@@ -3287,6 +3557,7 @@ class SiYuanSharePlugin extends Plugin {
     }
     this.siteShares = siteShares;
     this.shareOptions = shareOptions;
+    this.incrementalCursorBySite = incrementalCursorBySite;
     this.settings = {
       siteUrl: activeSite?.siteUrl || "",
       apiKey: activeSite?.apiKey || "",
@@ -3538,6 +3809,97 @@ class SiYuanSharePlugin extends Plugin {
       seen.add(id);
     });
     return sites;
+  }
+
+  normalizeIncrementalCursorBySite(raw) {
+    const out = {};
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return out;
+    Object.entries(raw).forEach(([siteIdRaw, cursorMap]) => {
+      const siteId = String(siteIdRaw || "").trim();
+      if (!siteId) return;
+      if (!cursorMap || typeof cursorMap !== "object" || Array.isArray(cursorMap)) return;
+      const nextMap = {};
+      Object.entries(cursorMap).forEach(([shareIdRaw, stampRaw]) => {
+        const shareId = String(shareIdRaw || "").trim();
+        if (!shareId) return;
+        const stamp = normalizeDocUpdatedStamp(stampRaw);
+        if (!stamp) return;
+        nextMap[shareId] = stamp;
+      });
+      if (Object.keys(nextMap).length) {
+        out[siteId] = nextMap;
+      }
+    });
+    return out;
+  }
+
+  getActiveSiteId() {
+    return String(this.settings?.activeSiteId || "").trim();
+  }
+
+  getIncrementalCursor(shareId) {
+    const siteId = this.getActiveSiteId();
+    const shareKey = String(shareId || "").trim();
+    if (!siteId || !shareKey) return "";
+    const siteMap = this.incrementalCursorBySite?.[siteId];
+    if (!siteMap || typeof siteMap !== "object") return "";
+    return normalizeDocUpdatedStamp(siteMap[shareKey]);
+  }
+
+  async setIncrementalCursor(shareId, stamp) {
+    const siteId = this.getActiveSiteId();
+    const shareKey = String(shareId || "").trim();
+    const normalized = normalizeDocUpdatedStamp(stamp);
+    if (!siteId || !shareKey || !normalized) return;
+    const store = this.normalizeIncrementalCursorBySite(this.incrementalCursorBySite || {});
+    const siteMap = {...(store[siteId] || {})};
+    if (siteMap[shareKey] === normalized) return;
+    siteMap[shareKey] = normalized;
+    store[siteId] = siteMap;
+    this.incrementalCursorBySite = store;
+    await this.saveData(STORAGE_INCREMENTAL_CURSOR, store);
+  }
+
+  async clearIncrementalCursor(shareId) {
+    const siteId = this.getActiveSiteId();
+    const shareKey = String(shareId || "").trim();
+    if (!siteId || !shareKey) return;
+    const store = this.normalizeIncrementalCursorBySite(this.incrementalCursorBySite || {});
+    const siteMap = {...(store[siteId] || {})};
+    if (!Object.prototype.hasOwnProperty.call(siteMap, shareKey)) return;
+    delete siteMap[shareKey];
+    if (Object.keys(siteMap).length) {
+      store[siteId] = siteMap;
+    } else {
+      delete store[siteId];
+    }
+    this.incrementalCursorBySite = store;
+    await this.saveData(STORAGE_INCREMENTAL_CURSOR, store);
+  }
+
+  async pruneIncrementalCursor(shareIds = []) {
+    const siteId = this.getActiveSiteId();
+    if (!siteId) return;
+    const keep = new Set((Array.isArray(shareIds) ? shareIds : []).map((id) => String(id || "").trim()).filter(Boolean));
+    const store = this.normalizeIncrementalCursorBySite(this.incrementalCursorBySite || {});
+    const siteMapRaw = store[siteId];
+    if (!siteMapRaw || typeof siteMapRaw !== "object") return;
+    let changed = false;
+    const siteMap = {...siteMapRaw};
+    Object.keys(siteMap).forEach((key) => {
+      if (!keep.has(String(key))) {
+        delete siteMap[key];
+        changed = true;
+      }
+    });
+    if (!changed) return;
+    if (Object.keys(siteMap).length) {
+      store[siteId] = siteMap;
+    } else {
+      delete store[siteId];
+    }
+    this.incrementalCursorBySite = store;
+    await this.saveData(STORAGE_INCREMENTAL_CURSOR, store);
   }
 
   getActiveSite() {
@@ -4679,6 +5041,165 @@ class SiYuanSharePlugin extends Plugin {
     return out;
   }
 
+  async buildScopedIncrementalPlan(
+    {scopeDocs = [], exportedDocs = [], assetEntries = [], remoteSnapshot = null} = {},
+    {controller = null, progress = null} = {},
+  ) {
+    const t = this.t.bind(this);
+    const remoteDocs = this.normalizeSnapshotDocs(remoteSnapshot?.docs);
+    const remoteAssets = this.normalizeSnapshotAssets(remoteSnapshot?.assets);
+    const scopeDocList = Array.isArray(scopeDocs) ? scopeDocs : [];
+    const exportedDocList = Array.isArray(exportedDocs) ? exportedDocs : [];
+    const scopeDocIds = Array.from(
+      new Set(scopeDocList.map((doc) => String(doc?.docId || "").trim()).filter((id) => isValidDocId(id))),
+    );
+    const scopeDocSet = new Set(scopeDocIds);
+    const remoteDocMap = new Map(remoteDocs.map((doc) => [String(doc.docId), doc]));
+    const remoteAssetMap = new Map(remoteAssets.map((asset) => [String(asset.path), asset]));
+
+    const deletedDocIds = remoteDocs
+      .map((doc) => String(doc?.docId || "").trim())
+      .filter((id) => isValidDocId(id) && !scopeDocSet.has(id));
+
+    const localExportedDocs = [];
+    for (let i = 0; i < exportedDocList.length; i += 1) {
+      throwIfAborted(controller, t("siyuanShare.message.cancelled"));
+      const doc = exportedDocList[i] || {};
+      const docId = String(doc?.docId || "").trim();
+      if (!isValidDocId(docId)) continue;
+      const markdown = String(doc?.markdown || "");
+      const contentHash = normalizeHashHex(doc?.contentHash) || normalizeHashHex(await hashTextSha256(markdown));
+      const metaHash =
+        normalizeHashHex(doc?.metaHash) || normalizeHashHex(await hashTextSha256(buildDocMetaHashInput(doc)));
+      localExportedDocs.push({
+        docId,
+        title: String(doc?.title || ""),
+        icon: normalizeDocIconValue(doc?.icon || ""),
+        hPath: String(doc?.hPath || ""),
+        parentId: String(doc?.parentId || ""),
+        sortIndex: Number.isFinite(Number(doc?.sortIndex)) ? Number(doc.sortIndex) : 0,
+        sortOrder: Math.max(0, Math.floor(Number(doc?.sortOrder) || 0)),
+        markdown,
+        contentHash,
+        metaHash,
+      });
+      progress?.update?.({
+        text: t("siyuanShare.progress.analyzingIncrement"),
+        detail: t("siyuanShare.progress.analyzingDocs", {index: i + 1, total: exportedDocList.length}),
+      });
+    }
+
+    const uploadDocs = [];
+    let addedDocs = 0;
+    let updatedDocs = 0;
+    localExportedDocs.forEach((doc) => {
+      const remote = remoteDocMap.get(String(doc.docId));
+      if (!remote) {
+        addedDocs += 1;
+        uploadDocs.push(doc);
+        return;
+      }
+      const sameContent = remote.contentHash && remote.contentHash === normalizeHashHex(doc.contentHash);
+      const sameMeta = remote.metaHash && remote.metaHash === normalizeHashHex(doc.metaHash);
+      if (sameContent && sameMeta) return;
+      updatedDocs += 1;
+      uploadDocs.push(doc);
+    });
+
+    const localAssets = [];
+    const localAssetMap = new Map();
+    const list = Array.isArray(assetEntries) ? assetEntries : [];
+    for (let i = 0; i < list.length; i += 1) {
+      throwIfAborted(controller, t("siyuanShare.message.cancelled"));
+      const entry = list[i] || {};
+      const asset = entry.asset || entry;
+      const path = normalizeAssetPath(asset?.path || "");
+      if (!path || localAssetMap.has(path)) continue;
+      const blob = asset?.blob || null;
+      const hash = blob ? normalizeHashHex(await hashBlobSha256(blob)) : "";
+      const size = Math.max(0, Number(asset?.blob?.size) || 0);
+      const row = {
+        path,
+        docId: String(entry?.docId || "").trim(),
+        hash,
+        size,
+      };
+      localAssetMap.set(path, row);
+      localAssets.push(row);
+      progress?.update?.({
+        text: t("siyuanShare.progress.analyzingIncrement"),
+        detail: t("siyuanShare.progress.analyzingAssets", {index: i + 1, total: list.length}),
+      });
+    }
+
+    const changedAssetPaths = new Set();
+    const uploadAssets = [];
+    let addedAssets = 0;
+    let updatedAssets = 0;
+    localAssets.forEach((asset) => {
+      const remote = remoteAssetMap.get(String(asset.path));
+      if (!remote) {
+        addedAssets += 1;
+        changedAssetPaths.add(asset.path);
+        uploadAssets.push(asset);
+        return;
+      }
+      const sameHash = remote.hash && asset.hash && remote.hash === normalizeHashHex(asset.hash);
+      const sameDoc = String(remote.docId || "") === String(asset.docId || "");
+      if (sameHash && sameDoc) return;
+      updatedAssets += 1;
+      changedAssetPaths.add(asset.path);
+      uploadAssets.push(asset);
+    });
+
+    const uploadAssetEntries = list.filter((entry) => {
+      const asset = entry?.asset || entry;
+      const path = normalizeAssetPath(asset?.path || "");
+      return path && changedAssetPaths.has(path);
+    });
+
+    const deletedDocSet = new Set(deletedDocIds);
+    const exportedDocSet = new Set(localExportedDocs.map((doc) => String(doc.docId)));
+    const deletedAssetPaths = [];
+    remoteAssets.forEach((asset) => {
+      const path = normalizeAssetPath(asset?.path || "");
+      if (!path || localAssetMap.has(path)) return;
+      const docId = String(asset?.docId || "").trim();
+      if (docId && (deletedDocSet.has(docId) || exportedDocSet.has(docId))) {
+        deletedAssetPaths.push(path);
+      }
+    });
+    const uniqueDeletedAssetPaths = Array.from(new Set(deletedAssetPaths));
+
+    return {
+      uploadDocs,
+      uploadAssets: uploadAssets.map((asset) => ({
+        path: String(asset.path),
+        size: Math.max(0, Number(asset.size) || 0),
+        docId: String(asset.docId || ""),
+        hash: normalizeHashHex(asset.hash),
+      })),
+      uploadAssetEntries,
+      uploadAssetPaths: Array.from(changedAssetPaths),
+      deletedDocIds,
+      deletedAssetPaths: uniqueDeletedAssetPaths,
+      summary: {
+        baseDocs: remoteDocs.length,
+        baseAssets: remoteAssets.length,
+        totalDocs: scopeDocIds.length,
+        totalAssets: Math.max(0, remoteAssets.length - uniqueDeletedAssetPaths.length + uploadAssets.length),
+        addedDocs,
+        updatedDocs,
+        changedDocs: uploadDocs.length,
+        addedAssets,
+        updatedAssets,
+        changedAssets: uploadAssets.length,
+        deletedDocs: deletedDocIds.length,
+        deletedAssets: uniqueDeletedAssetPaths.length,
+      },
+    };
+  }
+
   buildIncrementalPlan(localState, remoteSnapshot) {
     const localDocs = Array.isArray(localState?.docs) ? localState.docs : [];
     const localAssets = Array.isArray(localState?.assets) ? localState.assets : [];
@@ -5086,6 +5607,7 @@ class SiYuanSharePlugin extends Plugin {
     if (!isValidDocId(docId)) throw new Error(t("siyuanShare.error.invalidDocId"));
     const controller = new AbortController();
     const progress = this.openProgressDialog(t("siyuanShare.progress.creatingShare"), controller);
+    const incrementalCursorStamp = formatDocUpdatedStampFromMs(nowTs());
     try {
       progress.update(t("siyuanShare.progress.verifyingSite"));
       await this.verifyRemote({controller, progress});
@@ -5099,11 +5621,26 @@ class SiYuanSharePlugin extends Plugin {
         rootIcon = DEFAULT_DOC_ICON_LEAF;
       }
       throwIfAborted(controller, t("siyuanShare.message.cancelled"));
-      let payload = null;
-      let assetEntries = [];
-      let assetManifest = [];
-      let resourceFailures = 0;
       let subtreeDocs = [];
+      const existingShare = this.getShareByDocId(docId);
+      let useIncremental = !!(existingShare?.id && this.supportsIncrementalShare());
+      let remoteSnapshot = null;
+      let shareMissingRemotely = false;
+      if (useIncremental) {
+        progress.update(t("siyuanShare.progress.analyzingIncrement"));
+        try {
+          remoteSnapshot = await this.fetchShareSnapshot(existingShare.id, {controller, progress});
+        } catch (err) {
+          if (isRemoteShareNotFoundError(err)) {
+            useIncremental = false;
+            shareMissingRemotely = true;
+            await this.clearIncrementalCursor(existingShare.id);
+            console.warn("Remote share missing, fallback to create-new flow.", {shareId: existingShare.id});
+          } else {
+            throw err;
+          }
+        }
+      }
       const exportedMarkdowns = [];
       const iconUploadMap = new Map();
       if (includeChildren) {
@@ -5116,108 +5653,114 @@ class SiYuanSharePlugin extends Plugin {
         applyDefaultDocIcons(subtreeDocs);
       }
       const useChildren = includeChildren && subtreeDocs.length > 1;
-      if (!useChildren) {
-        progress.update(t("siyuanShare.progress.exportingMarkdown"));
-        const exportRes = await this.exportDocMarkdown(docId);
-        throwIfAborted(controller, t("siyuanShare.message.cancelled"));
-        progress.update(t("siyuanShare.progress.preparingAssets"));
-        const {markdown, assets, failures} = await this.prepareMarkdownAssets(
-          exportRes.content || "",
+      const scopeDocs = useChildren
+        ? subtreeDocs.map((doc, index) => ({
+            docId: String(doc?.docId || "").trim(),
+            title: String(doc?.title || ""),
+            icon: normalizeDocIconValue(doc?.icon || ""),
+            parentId: String(doc?.parentId || ""),
+            sortIndex: Number.isFinite(Number(doc?.sortIndex)) ? Number(doc.sortIndex) : index,
+            sortOrder: Number.isFinite(Number(doc?.sortOrder)) ? Number(doc.sortOrder) : index,
+          }))
+        : [
+            {
+              docId: String(docId || "").trim(),
+              title: String(title || ""),
+              icon: normalizeDocIconValue(rootIcon || ""),
+              parentId: "",
+              sortIndex: 0,
+              sortOrder: 0,
+            },
+          ];
+      let candidateDocIds = scopeDocs.map((doc) => String(doc?.docId || "").trim());
+      if (useIncremental) {
+        progress.update(t("siyuanShare.progress.analyzingIncrement"));
+        const candidateInfo = await this.collectIncrementalCandidateDocIds(scopeDocs, existingShare, {
           controller,
-          notebookId,
-        );
+          progress,
+        });
+        candidateDocIds = Array.isArray(candidateInfo?.candidateDocIds) ? candidateInfo.candidateDocIds : [];
+        const structChangedDocIds = this.collectStructChangedDocIds(scopeDocs, remoteSnapshot);
+        if (structChangedDocIds.length) {
+          candidateDocIds = Array.from(new Set([...candidateDocIds, ...structChangedDocIds]));
+        }
+      }
+      const candidateSet = new Set(
+        candidateDocIds.map((id) => String(id || "").trim()).filter((id) => isValidDocId(id)),
+      );
+      const docsToExport = useIncremental
+        ? scopeDocs.filter((doc) => candidateSet.has(String(doc?.docId || "").trim()))
+        : scopeDocs.slice();
+
+      let resourceFailures = 0;
+      const docPayloads = [];
+      const assetMap = new Map();
+      const usedUploadPaths = new Set();
+      const docResults = await this.collectDocExportResults(docsToExport, notebookId, {controller, progress});
+      for (const result of docResults) {
+        const doc = result.doc || {};
+        const index = Number(result.index) || 0;
+        const exportRes = result.exportRes || {};
+        const markdown = String(result.markdown || "");
+        const assets = Array.isArray(result.assets) ? result.assets : [];
+        const failures = Array.isArray(result.failures) ? result.failures : [];
         if (markdown) exportedMarkdowns.push(markdown);
         resourceFailures += failures.length;
-        const assetMap = new Map();
-        const usedUploadPaths = new Set();
-        for (const asset of assets) {
-          const assetPath = asset?.path || "";
-          if (!assetPath || assetMap.has(assetPath)) continue;
-          assetMap.set(assetPath, {asset, docId});
-          usedUploadPaths.add(assetPath);
-        }
-        const finalIcon = await this.resolveIconUpload(rootIcon, {
-          docId,
+        const docIdValue = String(doc?.docId || "").trim();
+        const docTitle =
+          String(doc?.title || "").trim() || (docIdValue === docId ? title : t("siyuanShare.label.untitled"));
+        const iconValue = await this.resolveIconUpload(doc?.icon, {
+          docId: docIdValue,
           notebookId,
           usedUploadPaths,
           assetMap,
           iconUploadMap,
           controller,
         });
-        payload = {
-          docId,
-          title,
+        docPayloads.push({
+          docId: docIdValue,
+          title: docTitle,
           hPath: exportRes.hPath || "",
+          parentId: useChildren ? (docIdValue === docId ? "" : String(doc?.parentId || "")) : "",
+          sortIndex: Number.isFinite(Number(doc?.sortIndex)) ? Number(doc.sortIndex) : index,
+          sortOrder: Number.isFinite(Number(doc?.sortOrder)) ? Number(doc.sortOrder) : index,
           markdown,
-          sortOrder: 0,
-        };
-        if (finalIcon) payload.icon = finalIcon;
-        assetEntries = Array.from(assetMap.values());
-        assetManifest = assetEntries.map(({asset, docId: entryDocId}) => ({
-          path: asset.path,
-          size: Number(asset?.blob?.size) || 0,
-          docId: entryDocId,
-        }));
-      } else {
-        const docPayloads = [];
-        const assetMap = new Map();
-        const usedUploadPaths = new Set();
-        const docResults = await this.collectDocExportResults(subtreeDocs, notebookId, {controller, progress});
-        for (const result of docResults) {
-          const doc = result.doc;
-          const index = Number(result.index) || 0;
-          const exportRes = result.exportRes || {};
-          const markdown = String(result.markdown || "");
-          const assets = Array.isArray(result.assets) ? result.assets : [];
-          const failures = Array.isArray(result.failures) ? result.failures : [];
-          if (markdown) exportedMarkdowns.push(markdown);
-          resourceFailures += failures.length;
-          const docTitle =
-            doc.title || (doc.docId === docId ? title : t("siyuanShare.label.untitled"));
-          const iconValue = await this.resolveIconUpload(doc?.icon, {
-            docId: doc.docId,
-            notebookId,
-            usedUploadPaths,
-            assetMap,
-            iconUploadMap,
-            controller,
-          });
-          docPayloads.push({
-            docId: doc.docId,
-            title: docTitle,
-            hPath: exportRes.hPath || "",
-            parentId: doc.docId === docId ? "" : doc.parentId || "",
-            sortIndex: Number.isFinite(doc.sortIndex) ? doc.sortIndex : index,
-            sortOrder: index,
-            markdown,
-            ...(iconValue ? {icon: iconValue} : {}),
-          });
-          for (const asset of assets) {
-            if (!asset?.path || assetMap.has(asset.path)) continue;
-            assetMap.set(asset.path, {asset, docId: doc.docId});
-            usedUploadPaths.add(asset.path);
-          }
+          ...(iconValue ? {icon: iconValue} : {}),
+        });
+        for (const asset of assets) {
+          if (!asset?.path || assetMap.has(asset.path)) continue;
+          assetMap.set(asset.path, {asset, docId: docIdValue});
+          usedUploadPaths.add(asset.path);
         }
-        payload = {
-          docId,
-          title,
-          docs: docPayloads,
-        };
-        assetEntries = Array.from(assetMap.values());
-        assetManifest = assetEntries.map(({asset, docId}) => ({
-          path: asset.path,
-          size: Number(asset?.blob?.size) || 0,
-          docId,
-        }));
       }
       if (resourceFailures > 0) {
         console.warn("Some assets failed to download.", resourceFailures);
       }
-      const refDocIds = useChildren
-        ? subtreeDocs.map((doc) => String(doc?.docId || ""))
-        : [docId];
+      const refDocIds = scopeDocs.map((doc) => String(doc?.docId || ""));
       await this.maybeWarnExportReference(exportedMarkdowns, refDocIds);
       throwIfAborted(controller, t("siyuanShare.message.cancelled"));
+      const rootPayload = docPayloads.find((row) => String(row?.docId || "") === String(docId));
+      if (!useChildren && !useIncremental && !rootPayload) {
+        throw new Error(t("siyuanShare.error.exportMarkdownFailed"));
+      }
+      const payload = useChildren
+        ? {
+            docId,
+            title,
+            docs: docPayloads,
+          }
+        : {
+            docId,
+            title,
+            ...(rootPayload
+              ? {
+                  hPath: rootPayload.hPath || "",
+                  markdown: String(rootPayload.markdown || ""),
+                  sortOrder: Math.max(0, Math.floor(Number(rootPayload.sortOrder) || 0)),
+                  ...(rootPayload.icon ? {icon: rootPayload.icon} : {}),
+                }
+              : {docs: []}),
+          };
       const slug = sanitizeSlug(slugOverride);
       if (slug) payload.slug = slug;
       if (clearPassword) {
@@ -5235,59 +5778,69 @@ class SiYuanSharePlugin extends Plugin {
       } else if (Number.isFinite(visitorLimit)) {
         payload.visitorLimit = Math.max(0, Math.floor(visitorLimit));
       }
+      const assetEntries = Array.from(assetMap.values());
+      const assetManifest = assetEntries.map(({asset, docId: entryDocId}) => ({
+        path: asset.path,
+        size: Number(asset?.blob?.size) || 0,
+        docId: entryDocId,
+      }));
       let uploadPayload = payload;
       let uploadAssetEntries = assetEntries;
       let uploadAssetManifest = assetManifest;
-      const existingShare = this.getShareByDocId(docId);
-      const canUseIncremental = !!(existingShare?.id && this.supportsIncrementalShare());
-      try {
+      let plan = null;
+      if (useIncremental) {
+        if (!remoteSnapshot) {
+          throw new Error("Incremental snapshot unavailable");
+        }
+        progress.update(t("siyuanShare.progress.analyzingIncrement"));
+        plan = await this.buildScopedIncrementalPlan(
+          {
+            scopeDocs,
+            exportedDocs: docPayloads,
+            assetEntries,
+            remoteSnapshot,
+          },
+          {controller, progress},
+        );
+      } else {
         progress.update(t("siyuanShare.progress.analyzingIncrement"));
         const localState = await this.buildIncrementalLocalState(payload, assetEntries, {controller, progress});
         localState.assetEntries = assetEntries;
         throwIfAborted(controller, t("siyuanShare.message.cancelled"));
-        const plan = canUseIncremental
-          ? this.buildIncrementalPlan(
-              localState,
-              await this.fetchShareSnapshot(existingShare.id, {controller, progress}),
-            )
-          : this.buildFullUploadPlan(localState, {assumeExisting: !!existingShare?.id});
-        const detail = this.formatIncrementSummaryDetail(plan.summary);
-        let proceed = false;
-        progress.setBarVisible?.(false);
-        try {
-          proceed = await progress.confirm({
-            text: t("siyuanShare.progress.incrementReady"),
-            detail,
-            continueText: t("siyuanShare.action.continueUpload"),
-          });
-        } finally {
-          progress.setBarVisible?.(true);
-        }
-        if (!proceed) {
-          throw createAbortError(t("siyuanShare.message.cancelled"));
-        }
-        if (canUseIncremental) {
-          uploadPayload = {...payload};
-          delete uploadPayload.markdown;
-          delete uploadPayload.hPath;
-          delete uploadPayload.sortOrder;
-          delete uploadPayload.icon;
-          uploadPayload.docs = plan.uploadDocs;
-          uploadPayload.incremental = {
-            enabled: true,
-            deletedDocIds: plan.deletedDocIds,
-            deletedAssetPaths: plan.deletedAssetPaths,
-            ...plan.summary,
-          };
-          uploadAssetEntries = plan.uploadAssetEntries;
-          uploadAssetManifest = plan.uploadAssets;
-        }
-      } catch (err) {
-        if (isAbortError(err) || controller?.signal?.aborted) throw err;
-        console.warn("Incremental analysis failed, fallback to full update.", err);
-        uploadPayload = payload;
-        uploadAssetEntries = assetEntries;
-        uploadAssetManifest = assetManifest;
+        plan = this.buildFullUploadPlan(localState, {
+          assumeExisting: !!existingShare?.id && !shareMissingRemotely,
+        });
+      }
+      const detail = this.formatIncrementSummaryDetail(plan.summary);
+      let proceed = false;
+      progress.setBarVisible?.(false);
+      try {
+        proceed = await progress.confirm({
+          text: t("siyuanShare.progress.incrementReady"),
+          detail,
+          continueText: t("siyuanShare.action.continueUpload"),
+        });
+      } finally {
+        progress.setBarVisible?.(true);
+      }
+      if (!proceed) {
+        throw createAbortError(t("siyuanShare.message.cancelled"));
+      }
+      if (useIncremental) {
+        uploadPayload = {...payload};
+        delete uploadPayload.markdown;
+        delete uploadPayload.hPath;
+        delete uploadPayload.sortOrder;
+        delete uploadPayload.icon;
+        uploadPayload.docs = plan.uploadDocs;
+        uploadPayload.incremental = {
+          enabled: true,
+          deletedDocIds: plan.deletedDocIds,
+          deletedAssetPaths: plan.deletedAssetPaths,
+          ...plan.summary,
+        };
+        uploadAssetEntries = plan.uploadAssetEntries;
+        uploadAssetManifest = plan.uploadAssets;
       }
       progress.update(t("siyuanShare.progress.uploadingContent"));
       let requestError = null;
@@ -5362,6 +5915,7 @@ class SiYuanSharePlugin extends Plugin {
       this.shareOptions[String(share.id)] = !!includeChildren;
       await this.saveData(STORAGE_SHARE_OPTIONS, this.shareOptions);
       await this.updateSharePasswordCache(share.id, {password, clearPassword});
+      await this.setIncrementalCursor(share.id, incrementalCursorStamp);
       if (requestError) {
         console.warn("shareDoc response error, but share exists after sync", requestError);
       }
@@ -5392,6 +5946,7 @@ class SiYuanSharePlugin extends Plugin {
     if (!isValidNotebookId(notebookId)) throw new Error(t("siyuanShare.error.invalidNotebookId"));
     const controller = new AbortController();
     const progress = this.openProgressDialog(t("siyuanShare.progress.creatingNotebookShare"), controller);
+    const incrementalCursorStamp = formatDocUpdatedStampFromMs(nowTs());
     try {
       progress.update(t("siyuanShare.progress.verifyingSite"));
       await this.verifyRemote({controller, progress});
@@ -5408,15 +5963,62 @@ class SiYuanSharePlugin extends Plugin {
       if (!docs.length) throw new Error(t("siyuanShare.error.noDocsToShare"));
       await this.fillDocIcons(docs);
       applyDefaultDocIcons(docs);
+      const scopeDocs = docs.map((doc, index) => ({
+        docId: String(doc?.docId || "").trim(),
+        title: String(doc?.title || ""),
+        icon: normalizeDocIconValue(doc?.icon || ""),
+        parentId: String(doc?.parentId || ""),
+        sortIndex: Number.isFinite(Number(doc?.sortIndex)) ? Number(doc.sortIndex) : index,
+        sortOrder: Number.isFinite(Number(doc?.sortOrder)) ? Number(doc.sortOrder) : index,
+      }));
+      const existingShare = this.getShareByNotebookId(notebookId);
+      let useIncremental = !!(existingShare?.id && this.supportsIncrementalShare());
+      let remoteSnapshot = null;
+      let shareMissingRemotely = false;
+      if (useIncremental) {
+        progress.update(t("siyuanShare.progress.analyzingIncrement"));
+        try {
+          remoteSnapshot = await this.fetchShareSnapshot(existingShare.id, {controller, progress});
+        } catch (err) {
+          if (isRemoteShareNotFoundError(err)) {
+            useIncremental = false;
+            shareMissingRemotely = true;
+            await this.clearIncrementalCursor(existingShare.id);
+            console.warn("Remote share missing, fallback to create-new flow.", {shareId: existingShare.id});
+          } else {
+            throw err;
+          }
+        }
+      }
+      let candidateDocIds = scopeDocs.map((doc) => String(doc?.docId || "").trim());
+      if (useIncremental) {
+        progress.update(t("siyuanShare.progress.analyzingIncrement"));
+        const candidateInfo = await this.collectIncrementalCandidateDocIds(scopeDocs, existingShare, {
+          controller,
+          progress,
+        });
+        candidateDocIds = Array.isArray(candidateInfo?.candidateDocIds) ? candidateInfo.candidateDocIds : [];
+        const structChangedDocIds = this.collectStructChangedDocIds(scopeDocs, remoteSnapshot);
+        if (structChangedDocIds.length) {
+          candidateDocIds = Array.from(new Set([...candidateDocIds, ...structChangedDocIds]));
+        }
+      }
+      const candidateSet = new Set(
+        candidateDocIds.map((id) => String(id || "").trim()).filter((id) => isValidDocId(id)),
+      );
+      const docsToExport = useIncremental
+        ? scopeDocs.filter((doc) => candidateSet.has(String(doc?.docId || "").trim()))
+        : scopeDocs.slice();
+
       const docPayloads = [];
       const assetMap = new Map();
       const usedUploadPaths = new Set();
       const iconUploadMap = new Map();
       const exportedMarkdowns = [];
       let failureCount = 0;
-      const docResults = await this.collectDocExportResults(docs, notebookId, {controller, progress});
+      const docResults = await this.collectDocExportResults(docsToExport, notebookId, {controller, progress});
       for (const result of docResults) {
-        const doc = result.doc;
+        const doc = result.doc || {};
         const index = Number(result.index) || 0;
         const exportRes = result.exportRes || {};
         const markdown = String(result.markdown || "");
@@ -5424,8 +6026,9 @@ class SiYuanSharePlugin extends Plugin {
         const failures = Array.isArray(result.failures) ? result.failures : [];
         if (markdown) exportedMarkdowns.push(markdown);
         failureCount += failures.length;
+        const docIdValue = String(doc?.docId || "").trim();
         const iconValue = await this.resolveIconUpload(doc?.icon, {
-          docId: doc.docId,
+          docId: docIdValue,
           notebookId,
           usedUploadPaths,
           assetMap,
@@ -5433,7 +6036,7 @@ class SiYuanSharePlugin extends Plugin {
           controller,
         });
         docPayloads.push({
-          docId: doc.docId,
+          docId: docIdValue,
           title: doc.title || t("siyuanShare.label.untitled"),
           hPath: exportRes.hPath || "",
           markdown,
@@ -5444,14 +6047,14 @@ class SiYuanSharePlugin extends Plugin {
         });
         for (const asset of assets) {
           if (!asset?.path || assetMap.has(asset.path)) continue;
-          assetMap.set(asset.path, {asset, docId: doc.docId});
+          assetMap.set(asset.path, {asset, docId: docIdValue});
           usedUploadPaths.add(asset.path);
         }
       }
       if (failureCount > 0) {
         console.warn("Some assets failed to download.", failureCount);
       }
-      const refDocIds = docs.map((doc) => String(doc?.docId || ""));
+      const refDocIds = scopeDocs.map((doc) => String(doc?.docId || ""));
       await this.maybeWarnExportReference(exportedMarkdowns, refDocIds);
       throwIfAborted(controller, t("siyuanShare.message.cancelled"));
       const payload = {
@@ -5485,51 +6088,55 @@ class SiYuanSharePlugin extends Plugin {
       let uploadPayload = payload;
       let uploadAssetEntries = assetEntries;
       let uploadAssetManifest = assetManifest;
-      const existingShare = this.getShareByNotebookId(notebookId);
-      const canUseIncremental = !!(existingShare?.id && this.supportsIncrementalShare());
-      try {
+      let plan = null;
+      if (useIncremental) {
+        if (!remoteSnapshot) {
+          throw new Error("Incremental snapshot unavailable");
+        }
+        progress.update(t("siyuanShare.progress.analyzingIncrement"));
+        plan = await this.buildScopedIncrementalPlan(
+          {
+            scopeDocs,
+            exportedDocs: docPayloads,
+            assetEntries,
+            remoteSnapshot,
+          },
+          {controller, progress},
+        );
+      } else {
         progress.update(t("siyuanShare.progress.analyzingIncrement"));
         const localState = await this.buildIncrementalLocalState(payload, assetEntries, {controller, progress});
         localState.assetEntries = assetEntries;
         throwIfAborted(controller, t("siyuanShare.message.cancelled"));
-        const plan = canUseIncremental
-          ? this.buildIncrementalPlan(
-              localState,
-              await this.fetchShareSnapshot(existingShare.id, {controller, progress}),
-            )
-          : this.buildFullUploadPlan(localState, {assumeExisting: !!existingShare?.id});
-        const detail = this.formatIncrementSummaryDetail(plan.summary);
-        let proceed = false;
-        progress.setBarVisible?.(false);
-        try {
-          proceed = await progress.confirm({
-            text: t("siyuanShare.progress.incrementReady"),
-            detail,
-            continueText: t("siyuanShare.action.continueUpload"),
-          });
-        } finally {
-          progress.setBarVisible?.(true);
-        }
-        if (!proceed) {
-          throw createAbortError(t("siyuanShare.message.cancelled"));
-        }
-        if (canUseIncremental) {
-          uploadPayload = {...payload, docs: plan.uploadDocs};
-          uploadPayload.incremental = {
-            enabled: true,
-            deletedDocIds: plan.deletedDocIds,
-            deletedAssetPaths: plan.deletedAssetPaths,
-            ...plan.summary,
-          };
-          uploadAssetEntries = plan.uploadAssetEntries;
-          uploadAssetManifest = plan.uploadAssets;
-        }
-      } catch (err) {
-        if (isAbortError(err) || controller?.signal?.aborted) throw err;
-        console.warn("Incremental analysis failed, fallback to full update.", err);
-        uploadPayload = payload;
-        uploadAssetEntries = assetEntries;
-        uploadAssetManifest = assetManifest;
+        plan = this.buildFullUploadPlan(localState, {
+          assumeExisting: !!existingShare?.id && !shareMissingRemotely,
+        });
+      }
+      const detail = this.formatIncrementSummaryDetail(plan.summary);
+      let proceed = false;
+      progress.setBarVisible?.(false);
+      try {
+        proceed = await progress.confirm({
+          text: t("siyuanShare.progress.incrementReady"),
+          detail,
+          continueText: t("siyuanShare.action.continueUpload"),
+        });
+      } finally {
+        progress.setBarVisible?.(true);
+      }
+      if (!proceed) {
+        throw createAbortError(t("siyuanShare.message.cancelled"));
+      }
+      if (useIncremental) {
+        uploadPayload = {...payload, docs: plan.uploadDocs};
+        uploadPayload.incremental = {
+          enabled: true,
+          deletedDocIds: plan.deletedDocIds,
+          deletedAssetPaths: plan.deletedAssetPaths,
+          ...plan.summary,
+        };
+        uploadAssetEntries = plan.uploadAssetEntries;
+        uploadAssetManifest = plan.uploadAssets;
       }
       progress.update(t("siyuanShare.progress.uploadingContent"));
       let requestError = null;
@@ -5602,6 +6209,7 @@ class SiYuanSharePlugin extends Plugin {
         throw new Error(t("siyuanShare.error.shareCreateFailed"));
       }
       await this.updateSharePasswordCache(share.id, {password, clearPassword});
+      await this.setIncrementalCursor(share.id, incrementalCursorStamp);
       if (requestError) {
         console.warn("shareNotebook response error, but share exists after sync", requestError);
       }
@@ -6049,6 +6657,9 @@ class SiYuanSharePlugin extends Plugin {
         delete this.shareOptions[key];
         await this.saveData(STORAGE_SHARE_OPTIONS, this.shareOptions);
       }
+      if (key) {
+        await this.clearIncrementalCursor(key);
+      }
       this.renderSettingCurrent();
       this.notify(t("siyuanShare.message.deleteSuccess"));
     });
@@ -6315,6 +6926,7 @@ class SiYuanSharePlugin extends Plugin {
     if (activeSiteId) {
       this.siteShares[activeSiteId] = shares;
       await this.saveData(STORAGE_SITE_SHARES, this.siteShares);
+      await this.pruneIncrementalCursor(shares.map((share) => share?.id));
     }
     if (this.shareOptions) {
       await this.saveData(STORAGE_SHARE_OPTIONS, this.shareOptions);
