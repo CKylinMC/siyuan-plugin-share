@@ -33,15 +33,15 @@ const UPLOAD_CHUNK_MAX_SIZE = 8 * MB;
 const UPLOAD_CHUNK_HARD_MAX_SIZE = 10 * MB;
 const UPLOAD_TARGET_CHUNK_MS = 1800;
 const UPLOAD_DEFAULT_SPEED_BPS = 2 * MB;
-const DEFAULT_UPLOAD_ASSET_CONCURRENCY = 8;
-const DEFAULT_UPLOAD_CHUNK_CONCURRENCY = 4;
+const DEFAULT_UPLOAD_ASSET_CONCURRENCY = 10;
+const DEFAULT_UPLOAD_CHUNK_CONCURRENCY = 5;
 const DEFAULT_DOC_EXPORT_CONCURRENCY = 4;
 const DEFAULT_MARKDOWN_ASSET_PREPARE_CONCURRENCY = 3;
 const DOC_CHUNK_UPLOAD_PREFIX = "__sps_docs";
-const UPLOAD_RETRY_LIMIT = 5;
+const UPLOAD_RETRY_LIMIT = 8;
 const UPLOAD_RETRY_BASE_DELAY = 400;
 const UPLOAD_RETRY_MAX_DELAY = 2000;
-const UPLOAD_MISSING_CHUNK_RETRY_LIMIT = 3;
+const UPLOAD_MISSING_CHUNK_RETRY_LIMIT = 8;
 const EXPORT_RETRY_CACHE_DIR_NAME = "export-retry-cache";
 const EXPORT_RETRY_CACHE_VERSION = 1;
 
@@ -6258,7 +6258,18 @@ class SiYuanSharePlugin extends Plugin {
       .slice()
       .sort((a, b) => (Number(b?.asset?.blob?.size) || 0) - (Number(a?.asset?.blob?.size) || 0));
     const sizes = sortedEntries.map((entry) => Number(entry?.asset?.blob?.size) || 0);
-    const assetConcurrency = this.getAdaptiveAssetConcurrency(totalBytes, entries.length, assetMax, sizes);
+    let assetConcurrency = this.getAdaptiveAssetConcurrency(totalBytes, entries.length, assetMax, sizes);
+    const docPrefix = `${DOC_CHUNK_UPLOAD_PREFIX}/`;
+    const docChunkCount = sortedEntries.reduce((count, entry) => {
+      const path = String(entry?.asset?.path || entry?.path || "");
+      return count + (path.startsWith(docPrefix) ? 1 : 0);
+    }, 0);
+    if (docChunkCount > 0) {
+      const ratio = docChunkCount / Math.max(1, sortedEntries.length);
+      // Doc chunk uploads are prone to transient missing-chunk races.
+      // Cap upload-asset concurrency when doc chunks dominate.
+      assetConcurrency = Math.max(1, Math.min(assetConcurrency, ratio >= 0.5 ? 4 : 5));
+    }
     let fatalError = null;
     const tracker = {
       totalBytes: Number.isFinite(totalBytes) ? totalBytes : 0,
@@ -6341,7 +6352,9 @@ class SiYuanSharePlugin extends Plugin {
     const size = Number(blob.size) || 0;
     const chunkSize = this.getAdaptiveChunkSize(size);
     const totalChunks = Math.max(1, Math.ceil(size / chunkSize));
-    const concurrency = this.getAdaptiveChunkConcurrency(size, chunkSize, chunkMaxConcurrency);
+    const baseConcurrency = this.getAdaptiveChunkConcurrency(size, chunkSize, chunkMaxConcurrency);
+    const isDocChunkAsset = String(assetPath || "").startsWith(`${DOC_CHUNK_UPLOAD_PREFIX}/`);
+    const concurrency = isDocChunkAsset ? Math.max(1, Math.min(2, baseConcurrency)) : baseConcurrency;
     const uploadChunkOnce = async (index, {countBytes = true} = {}) => {
       throwIfAborted(controller, t("siyuanShare.message.cancelled"));
       const start = index * chunkSize;
@@ -6430,6 +6443,8 @@ class SiYuanSharePlugin extends Plugin {
           missing: normalizedMissing,
           attempt: missingAttempt,
         });
+        // Give in-flight writes a short settle window before retry.
+        await sleep(120 + Math.floor(Math.random() * 180));
         const retryTasks = normalizedMissing.map((idx) => () => uploadChunkOnce(idx, {countBytes: false}));
         await runTasksWithConcurrency(retryTasks, Math.min(concurrency, retryTasks.length));
       }
