@@ -1,0 +1,77 @@
+name: Build and Push Docker Image to GHCR
+
+on:
+  workflow_dispatch:  # Manually triggered workflow
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Read version from plugin.json
+        id: read_version
+        run: |
+          if [ ! -f "plugin.json" ]; then
+            echo "Error: plugin.json not found"
+            exit 1
+          fi
+          VERSION=$(jq -r '.version' plugin.json)
+          if [ -z "$VERSION" ] || [ "$VERSION" == "null" ]; then
+            echo "Error: Unable to extract version from plugin.json"
+            exit 1
+          fi
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "Version read from plugin.json: $VERSION"
+      
+      - name: Prepare config.php for Docker build
+        run: |
+          # Copy config.example.php to config.php
+          if [ ! -f "php-site/config.example.php" ]; then
+            echo "Error: php-site/config.example.php not found"
+            exit 1
+          fi
+          cp php-site/config.example.php php-site/config.php
+          echo "config.php created from config.example.php"
+          
+          # Verify .dockerignore exists
+          if [ ! -f ".dockerignore" ]; then
+            echo "Error: .dockerignore not found"
+            exit 1
+          fi
+          
+          # Verify that .dockerignore contains the php-site/config.php exclusion
+          if ! grep -q "^php-site/config\.php$" .dockerignore; then
+            echo "Warning: php-site/config.php not found in .dockerignore, skipping removal"
+          else
+            # Remove php-site/config.php from .dockerignore temporarily
+            sed -i '/^php-site\/config\.php$/d' .dockerignore
+            echo "Temporarily removed php-site/config.php from .dockerignore"
+          fi
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./php-site/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}:latest
+            ghcr.io/${{ github.repository }}:${{ steps.read_version.outputs.VERSION }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
