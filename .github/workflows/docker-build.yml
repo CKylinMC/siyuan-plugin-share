@@ -63,7 +63,11 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      
+      - name: set lower case repo name
+        run: |
+          echo "REPO_LC=${REPO,,}" >>${GITHUB_ENV}
+        env:
+          REPO: '${{ github.repository }}'
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
@@ -71,7 +75,7 @@ jobs:
           file: ./php-site/Dockerfile
           push: true
           tags: |
-            ghcr.io/${{ github.repository }}:latest
-            ghcr.io/${{ github.repository }}:${{ steps.read_version.outputs.VERSION }}
+            ghcr.io/${{ env.REPO_LC }}:latest
+            ghcr.io/${{ env.REPO_LC }}:${{ steps.read_version.outputs.VERSION }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
